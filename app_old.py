@@ -2,190 +2,38 @@ from shiny import App, render, ui, reactive
 import chess
 import chess.svg
 import requests
-import json
 from pathlib import Path
 
-# JavaScript for interactive chess board using chessboard.js
-interactive_board_js = """
-<link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
-
-<style>
-    #myBoard {
-        width: 500px;
-        margin: 20px auto;
-    }
-    .highlight-square {
-        box-shadow: inset 0 0 3px 3px yellow;
-    }
-    .move-hint {
-        background: radial-gradient(circle, rgba(0,255,0,0.3) 25%, transparent 25%);
-    }
-    /* Override piece image paths to use CDN */
-    .piece-417db {
-        background-image: none !important;
-    }
-</style>
-
-<script>
-var board = null;
-var game = new Chess();
-var squareToHighlight = null;
-var squareClass = 'highlight-square';
-
-function removeHighlights() {
-    $('#myBoard .square-55d63').removeClass('highlight-square');
-    $('#myBoard .square-55d63').removeClass('move-hint');
-}
-
-function highlightSquare(square) {
-    var $square = $('#myBoard .square-' + square);
-    $square.addClass(squareClass);
-}
-
-function showMoveHints(square) {
-    var moves = game.moves({
-        square: square,
-        verbose: true
-    });
-    
-    // Highlight valid move squares
-    for (var i = 0; i < moves.length; i++) {
-        $('#myBoard .square-' + moves[i].to).addClass('move-hint');
-    }
-}
-
-function onDragStart(source, piece, position, orientation) {
-    // Don't allow moves if game is over
-    if (game.game_over()) return false;
-    
-    // Only allow moves for the side to move
-    if ((game.turn() === 'w' && piece.search(/^b/) !== -1) ||
-        (game.turn() === 'b' && piece.search(/^w/) !== -1)) {
-        return false;
-    }
-}
-
-function onDrop(source, target) {
-    removeHighlights();
-    
-    // Try to make the move
-    var move = game.move({
-        from: source,
-        to: target,
-        promotion: 'q' // Always promote to queen for simplicity
-    });
-    
-    // Invalid move
-    if (move === null) return 'snapback';
-    
-    // Update move list in Shiny
-    updateShinyMoves();
-}
-
-function onMouseoverSquare(square, piece) {
-    // Show hints for valid moves
-    if (piece) {
-        removeHighlights();
-        showMoveHints(square);
-    }
-}
-
-function onMouseoutSquare(square, piece) {
-    removeHighlights();
-}
-
-function onSnapEnd() {
-    board.position(game.fen());
-}
-
-function updateShinyMoves() {
-    // Get move history in SAN notation
-    var history = game.history();
-    var movesText = history.join(' ');
-    
-    // Update Shiny input
-    Shiny.setInputValue('board_moves', movesText, {priority: 'event'});
-}
-
-function loadPosition(fen) {
-    game.load(fen);
-    board.position(fen);
-}
-
-function resetBoard() {
-    game.reset();
-    board.start();
-    updateShinyMoves();
-}
-
-// Initialize board
-var config = {
-    draggable: true,
-    position: 'start',
-    onDragStart: onDragStart,
-    onDrop: onDrop,
-    onMouseoutSquare: onMouseoutSquare,
-    onMouseoverSquare: onMouseoverSquare,
-    onSnapEnd: onSnapEnd,
-    pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
-};
-
-$(document).ready(function() {
-    board = Chessboard('myBoard', config);
-});
-
-// Expose functions to Shiny
-window.loadPosition = loadPosition;
-window.resetBoard = resetBoard;
-</script>
-"""
-
 app_ui = ui.page_fluid(
-    ui.head_content(
-        ui.HTML(interactive_board_js)
-    ),
-    ui.panel_title("♟️ Interactive Chess Opening Explorer"),
+    ui.panel_title("Chess Opening Explorer"),
     ui.markdown(
         """
-        **Click and drag pieces** on the board to make moves, or enter them manually below.
-        Explore opening statistics and get **real Stockfish evaluation** via Lichess Cloud Analysis.
+        Enter chess moves in standard algebraic notation (e.g., e4 e5 Nf3 Nc6) 
+        to explore opening statistics and get **real Stockfish evaluation** via Lichess Cloud Analysis.
         """
     ),
     ui.layout_sidebar(
         ui.sidebar(
             ui.input_text_area(
                 "moves",
-                "Current moves:",
-                value="",
+                "Enter moves (space-separated):",
+                value="e4 e5 Nf3",
                 rows=3,
                 width="100%"
             ),
-            ui.input_action_button("apply_moves", "Apply Moves", class_="btn-primary"),
+            ui.input_action_button("analyze", "Analyze Opening", class_="btn-primary"),
             ui.input_action_button("reset", "Reset Board", class_="btn-secondary"),
             ui.hr(),
             ui.markdown("**Quick Start Examples:**"),
             ui.input_action_button("italian", "Italian Game", class_="btn-sm"),
             ui.input_action_button("sicilian", "Sicilian Defense", class_="btn-sm"),
             ui.input_action_button("french", "French Defense", class_="btn-sm"),
-            ui.hr(),
-            ui.markdown("**Tips:**"),
-            ui.markdown(
-                """
-                - Drag pieces to make moves
-                - Green dots show valid moves
-                - Yellow highlights show last move
-                - Auto-promotes to Queen
-                """
-            ),
             width=300
         ),
         ui.navset_tab(
             ui.nav_panel(
-                "Interactive Board",
-                ui.HTML('<div id="myBoard"></div>'),
+                "Board",
+                ui.output_ui("board_display"),
                 ui.output_text_verbatim("move_history")
             ),
             ui.nav_panel(
@@ -207,123 +55,62 @@ app_ui = ui.page_fluid(
 
 def server(input, output, session):
     board_state = reactive.Value(chess.Board())
-    update_trigger = reactive.Value(0)  # Trigger to force updates across all tabs
-    
-    # Reactive value to track board moves from JavaScript
-    @reactive.Effect
-    def _():
-        if hasattr(input, 'board_moves') and input.board_moves():
-            moves_text = input.board_moves()
-            ui.update_text("moves", value=moves_text)
-            
-            # Update board state
-            board = chess.Board()
-            if moves_text:
-                moves = moves_text.split()
-                try:
-                    for move_san in moves:
-                        move = board.parse_san(move_san)
-                        board.push(move)
-                    board_state.set(board)
-                except ValueError:
-                    pass
     
     @reactive.Effect
     @reactive.event(input.italian)
     def _():
-        moves = "e4 e5 Nf3 Nc6 Bc4"
-        ui.update_text("moves", value=moves)
-        board = chess.Board()
-        for move_san in moves.split():
-            board.push(board.parse_san(move_san))
-        board_state.set(board)
-        update_trigger.set(update_trigger.get() + 1)  # Force update
-        fen = board.fen()
-        ui.insert_ui(
-            ui.HTML(f'<script>if (window.loadPosition) loadPosition("{fen}");</script>'),
-            selector="body",
-            where="beforeEnd"
-        )
+        ui.update_text("moves", value="e4 e5 Nf3 Nc6 Bc4")
     
     @reactive.Effect
     @reactive.event(input.sicilian)
     def _():
-        moves = "e4 c5 Nf3 d6 d4"
-        ui.update_text("moves", value=moves)
-        board = chess.Board()
-        for move_san in moves.split():
-            board.push(board.parse_san(move_san))
-        board_state.set(board)
-        update_trigger.set(update_trigger.get() + 1)  # Force update
-        fen = board.fen()
-        ui.insert_ui(
-            ui.HTML(f'<script>if (window.loadPosition) loadPosition("{fen}");</script>'),
-            selector="body",
-            where="beforeEnd"
-        )
+        ui.update_text("moves", value="e4 c5 Nf3 d6 d4")
     
     @reactive.Effect
     @reactive.event(input.french)
     def _():
-        moves = "e4 e6 d4 d5"
-        ui.update_text("moves", value=moves)
-        board = chess.Board()
-        for move_san in moves.split():
-            board.push(board.parse_san(move_san))
-        board_state.set(board)
-        update_trigger.set(update_trigger.get() + 1)  # Force update
-        fen = board.fen()
-        ui.insert_ui(
-            ui.HTML(f'<script>if (window.loadPosition) loadPosition("{fen}");</script>'),
-            selector="body",
-            where="beforeEnd"
-        )
+        ui.update_text("moves", value="e4 e6 d4 d5")
     
     @reactive.Effect
     @reactive.event(input.reset)
     def _():
         board_state.set(chess.Board())
-        update_trigger.set(update_trigger.get() + 1)  # Force update
         ui.update_text("moves", value="")
-        ui.insert_ui(
-            ui.HTML('<script>if (window.resetBoard) resetBoard();</script>'),
-            selector="body",
-            where="beforeEnd"
-        )
     
     @reactive.Effect
-    @reactive.event(input.apply_moves)
+    @reactive.event(input.analyze)
     def _():
-        moves_text = input.moves().strip()
         board = chess.Board()
+        moves_text = input.moves().strip()
+        
         if moves_text:
             moves = moves_text.split()
             try:
                 for move_san in moves:
                     move = board.parse_san(move_san)
                     board.push(move)
+                board_state.set(board)
             except ValueError as e:
+                # Invalid move, keep previous board state
                 pass
-        
-        # Update board state (this will trigger reactive outputs)
-        board_state.set(board)
-        update_trigger.set(update_trigger.get() + 1)  # Force update
-        
-        # Update JavaScript board
-        fen = board.fen()
-        ui.insert_ui(
-            ui.HTML(f'<script>if (window.loadPosition) loadPosition("{fen}");</script>'),
-            selector="body",
-            where="beforeEnd"
+    
+    @output
+    @render.ui
+    def board_display():
+        board = board_state.get()
+        svg = chess.svg.board(
+            board=board,
+            size=500,
+            coordinates=True
         )
+        return ui.HTML(svg)
     
     @output
     @render.text
     def move_history():
-        update_trigger.get()  # Create dependency on trigger
         board = board_state.get()
         if len(board.move_stack) == 0:
-            return "No moves played yet. Starting position.\n\nClick and drag pieces on the board to make moves!"
+            return "No moves played yet. Starting position."
         
         moves_text = []
         temp_board = chess.Board()
@@ -334,26 +121,18 @@ def server(input, output, session):
                 moves_text[-1] += f" {temp_board.san(move)}"
             temp_board.push(move)
         
-        result = "Move History:\n" + " ".join(moves_text)
-        
-        # Add game status
-        if board.is_checkmate():
-            result += "\n\n🏁 CHECKMATE! " + ("Black" if board.turn else "White") + " wins!"
-        elif board.is_stalemate():
-            result += "\n\n🤝 STALEMATE - Draw"
-        elif board.is_check():
-            result += "\n\n⚠️ CHECK!"
-        
-        return result
+        return "Move History:\n" + " ".join(moves_text)
     
     @output
     @render.ui
     def opening_stats():
-        update_trigger.get()  # Create dependency on trigger
         board = board_state.get()
+        
+        # Get FEN for API request
         fen = board.fen()
         
         try:
+            # Call Lichess API
             response = requests.get(
                 "https://explorer.lichess.ovh/lichess",
                 params={
@@ -421,7 +200,6 @@ def server(input, output, session):
     @output
     @render.ui
     def evaluation():
-        update_trigger.get()  # Create dependency on trigger
         board = board_state.get()
         fen = board.fen()
         
@@ -441,13 +219,14 @@ def server(input, output, session):
         
         # Try to get Lichess Cloud Evaluation
         cloud_eval = None
+        best_moves = []
         
         try:
             response = requests.get(
                 "https://lichess.org/api/cloud-eval",
                 params={
                     "fen": fen,
-                    "multiPv": 3
+                    "multiPv": 3  # Get top 3 moves
                 },
                 timeout=5
             )
@@ -481,6 +260,7 @@ def server(input, output, session):
         
         material_diff = white_material - black_material
         
+        # Build the UI
         elements = [
             ui.h4("Position Evaluation"),
             ui.p(ui.strong("Status: "), result),
@@ -488,11 +268,13 @@ def server(input, output, session):
             ui.hr()
         ]
         
+        # Display Lichess Cloud Evaluation if available
         if cloud_eval and "pvs" in cloud_eval:
             elements.append(ui.h5("🔥 Lichess Cloud Analysis"))
             
-            pv_data = cloud_eval["pvs"][0]
+            pv_data = cloud_eval["pvs"][0]  # Best line
             
+            # Parse evaluation
             if "cp" in pv_data:
                 cp = pv_data["cp"]
                 eval_score = f"{cp / 100:+.2f}"
@@ -526,12 +308,14 @@ def server(input, output, session):
                 ui.p(ui.strong("Analysis Depth: "), str(cloud_eval.get("depth", "?"))),
             ])
             
+            # Show top moves
             if len(cloud_eval["pvs"]) > 0:
                 elements.append(ui.h5("Best Moves:"))
                 
                 for i, pv in enumerate(cloud_eval["pvs"][:3], 1):
-                    moves = pv.get("moves", "").split()[:3]
+                    moves = pv.get("moves", "").split()[:3]  # First 3 moves
                     
+                    # Convert UCI to SAN
                     temp_board = board.copy()
                     san_moves = []
                     for uci_move in moves:
@@ -563,6 +347,7 @@ def server(input, output, session):
                 )
             )
         else:
+            # Fallback to material evaluation
             elements.append(ui.h5("📊 Material Evaluation"))
             
             if game_status == "Game Over":
@@ -601,7 +386,6 @@ def server(input, output, session):
     @output
     @render.ui
     def next_moves():
-        update_trigger.get()  # Create dependency on trigger
         board = board_state.get()
         
         if board.is_game_over():
@@ -610,9 +394,11 @@ def server(input, output, session):
                 ui.p("No more moves available.")
             )
         
+        # Get FEN for API request
         fen = board.fen()
         
         try:
+            # Call Lichess API for popular moves
             response = requests.get(
                 "https://explorer.lichess.ovh/lichess",
                 params={
@@ -634,11 +420,12 @@ def server(input, output, session):
                     ui.p("No data available for next moves in this position.")
                 )
             
+            # Sort by number of games played
             moves_data.sort(key=lambda x: x.get("white", 0) + x.get("draws", 0) + x.get("black", 0), reverse=True)
             
             move_elements = [ui.h4("Popular Next Moves (from Lichess Database)")]
             
-            for i, move_info in enumerate(moves_data[:10], 1):
+            for i, move_info in enumerate(moves_data[:10], 1):  # Top 10 moves
                 san = move_info.get("san", "?")
                 white = move_info.get("white", 0)
                 draws = move_info.get("draws", 0)
