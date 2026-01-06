@@ -4,12 +4,94 @@ import chess.svg
 import requests
 from pathlib import Path
 
+# JavaScript code to load and interact with chess-wasm
+chess_wasm_js = """
+<script type="module">
+// Import chess-wasm from CDN
+import init, { Chess } from 'https://unpkg.com/chess-wasm@0.3.0/chess.js';
+
+let chessEngine = null;
+let currentEvaluation = "Initializing...";
+let bestMove = "";
+let engineReady = false;
+
+async function initChessWasm() {
+    try {
+        await init();
+        chessEngine = new Chess();
+        engineReady = true;
+        currentEvaluation = "Ready";
+        console.log("Chess-wasm engine initialized successfully");
+    } catch (error) {
+        console.error("Failed to initialize chess-wasm:", error);
+        currentEvaluation = "Failed to initialize";
+    }
+}
+
+window.analyzePositionWasm = function(fen) {
+    if (!engineReady || !chessEngine) {
+        currentEvaluation = "Engine not ready";
+        return;
+    }
+    
+    try {
+        currentEvaluation = "Analyzing...";
+        bestMove = "";
+        
+        // Set position
+        chessEngine.load_fen(fen);
+        
+        // Analyze position (depth 10-12 for good balance)
+        const result = chessEngine.go({ depth: 12 });
+        
+        if (result) {
+            // Extract evaluation
+            if (result.score !== undefined) {
+                // Score is in centipawns
+                const scorePawns = result.score / 100;
+                currentEvaluation = scorePawns.toFixed(2);
+            }
+            
+            // Extract best move
+            if (result.best_move) {
+                bestMove = result.best_move;
+            }
+        } else {
+            currentEvaluation = "Analysis complete";
+        }
+        
+    } catch (error) {
+        console.error("Analysis error:", error);
+        currentEvaluation = "Error: " + error.message;
+    }
+}
+
+window.getWasmEvaluation = function() {
+    return currentEvaluation;
+}
+
+window.getWasmBestMove = function() {
+    return bestMove;
+}
+
+window.isWasmReady = function() {
+    return engineReady;
+}
+
+// Initialize on load
+initChessWasm();
+</script>
+"""
+
 app_ui = ui.page_fluid(
-    ui.panel_title("Chess Opening Explorer"),
+    ui.head_content(
+        ui.HTML(chess_wasm_js)
+    ),
+    ui.panel_title("Chess Opening Explorer with Chess-WASM"),
     ui.markdown(
         """
         Enter chess moves in standard algebraic notation (e.g., e4 e5 Nf3 Nc6) 
-        to explore opening statistics and get **real Stockfish evaluation** via Lichess Cloud Analysis.
+        to explore opening statistics and get **lightweight chess-wasm engine analysis**.
         """
     ),
     ui.layout_sidebar(
@@ -22,6 +104,7 @@ app_ui = ui.page_fluid(
                 width="100%"
             ),
             ui.input_action_button("analyze", "Analyze Opening", class_="btn-primary"),
+            ui.input_action_button("wasm_analyze", "Run Chess-WASM", class_="btn-success"),
             ui.input_action_button("reset", "Reset Board", class_="btn-secondary"),
             ui.hr(),
             ui.markdown("**Quick Start Examples:**"),
@@ -41,8 +124,8 @@ app_ui = ui.page_fluid(
                 ui.output_ui("opening_stats")
             ),
             ui.nav_panel(
-                "Position Evaluation",
-                ui.output_ui("evaluation")
+                "Chess-WASM Evaluation",
+                ui.output_ui("wasm_eval")
             ),
             ui.nav_panel(
                 "Popular Next Moves",
@@ -91,8 +174,20 @@ def server(input, output, session):
                     board.push(move)
                 board_state.set(board)
             except ValueError as e:
-                # Invalid move, keep previous board state
                 pass
+    
+    @reactive.Effect
+    @reactive.event(input.wasm_analyze)
+    def _():
+        board = board_state.get()
+        fen = board.fen()
+        
+        # Trigger chess-wasm analysis via JavaScript
+        ui.insert_ui(
+            ui.HTML(f'<script>if (window.analyzePositionWasm) analyzePositionWasm("{fen}");</script>'),
+            selector="body",
+            where="beforeEnd"
+        )
     
     @output
     @render.ui
@@ -127,12 +222,9 @@ def server(input, output, session):
     @render.ui
     def opening_stats():
         board = board_state.get()
-        
-        # Get FEN for API request
         fen = board.fen()
         
         try:
-            # Call Lichess API
             response = requests.get(
                 "https://explorer.lichess.ovh/lichess",
                 params={
@@ -199,44 +291,11 @@ def server(input, output, session):
     
     @output
     @render.ui
-    def evaluation():
+    def wasm_eval():
         board = board_state.get()
         fen = board.fen()
         
-        # Check game state first
-        if board.is_checkmate():
-            result = "Checkmate! " + ("Black" if board.turn else "White") + " wins."
-            game_status = "Game Over"
-        elif board.is_stalemate():
-            result = "Stalemate - Draw"
-            game_status = "Game Over"
-        elif board.is_insufficient_material():
-            result = "Insufficient material - Draw"
-            game_status = "Game Over"
-        else:
-            result = "Game in progress"
-            game_status = "Active"
-        
-        # Try to get Lichess Cloud Evaluation
-        cloud_eval = None
-        best_moves = []
-        
-        try:
-            response = requests.get(
-                "https://lichess.org/api/cloud-eval",
-                params={
-                    "fen": fen,
-                    "multiPv": 3  # Get top 3 moves
-                },
-                timeout=5
-            )
-            
-            if response.status_code == 200:
-                cloud_eval = response.json()
-        except:
-            pass
-        
-        # Calculate material as fallback
+        # Calculate basic material as supplementary info
         piece_values = {
             chess.PAWN: 1,
             chess.KNIGHT: 3,
@@ -260,128 +319,90 @@ def server(input, output, session):
         
         material_diff = white_material - black_material
         
-        # Build the UI
-        elements = [
-            ui.h4("Position Evaluation"),
-            ui.p(ui.strong("Status: "), result),
-            ui.p(ui.strong("Game State: "), game_status),
-            ui.hr()
-        ]
-        
-        # Display Lichess Cloud Evaluation if available
-        if cloud_eval and "pvs" in cloud_eval:
-            elements.append(ui.h5("🔥 Lichess Cloud Analysis"))
-            
-            pv_data = cloud_eval["pvs"][0]  # Best line
-            
-            # Parse evaluation
-            if "cp" in pv_data:
-                cp = pv_data["cp"]
-                eval_score = f"{cp / 100:+.2f}"
-                eval_pawns = cp / 100
-                
-                if eval_pawns > 2:
-                    assessment = "White has a significant advantage"
-                elif eval_pawns > 0.5:
-                    assessment = "White is slightly better"
-                elif eval_pawns < -2:
-                    assessment = "Black has a significant advantage"
-                elif eval_pawns < -0.5:
-                    assessment = "Black is slightly better"
-                else:
-                    assessment = "Position is approximately equal"
-            elif "mate" in pv_data:
-                mate_in = pv_data["mate"]
-                if mate_in > 0:
-                    eval_score = f"M{mate_in}"
-                    assessment = f"White has mate in {mate_in}"
-                else:
-                    eval_score = f"-M{abs(mate_in)}"
-                    assessment = f"Black has mate in {abs(mate_in)}"
-            else:
-                eval_score = "?"
-                assessment = "Evaluation unavailable"
-            
-            elements.extend([
-                ui.p(ui.strong("Evaluation: "), eval_score),
-                ui.p(ui.strong("Assessment: "), assessment),
-                ui.p(ui.strong("Analysis Depth: "), str(cloud_eval.get("depth", "?"))),
-            ])
-            
-            # Show top moves
-            if len(cloud_eval["pvs"]) > 0:
-                elements.append(ui.h5("Best Moves:"))
-                
-                for i, pv in enumerate(cloud_eval["pvs"][:3], 1):
-                    moves = pv.get("moves", "").split()[:3]  # First 3 moves
-                    
-                    # Convert UCI to SAN
-                    temp_board = board.copy()
-                    san_moves = []
-                    for uci_move in moves:
-                        try:
-                            move = chess.Move.from_uci(uci_move)
-                            san_moves.append(temp_board.san(move))
-                            temp_board.push(move)
-                        except:
-                            break
-                    
-                    move_line = " ".join(san_moves)
-                    
-                    if "cp" in pv:
-                        move_eval = f"{pv['cp'] / 100:+.2f}"
-                    elif "mate" in pv:
-                        mate_in = pv["mate"]
-                        move_eval = f"M{mate_in}" if mate_in > 0 else f"-M{abs(mate_in)}"
-                    else:
-                        move_eval = "?"
-                    
-                    elements.append(
-                        ui.p(f"{i}. {move_line} ({move_eval})")
-                    )
-            
-            elements.append(
-                ui.p(
-                    ui.em("Source: Lichess Cloud Analysis powered by Stockfish"),
-                    style="font-size: 0.9em; color: #666;"
-                )
-            )
+        # Check game state
+        if board.is_checkmate():
+            game_status = "Checkmate! " + ("Black" if board.turn else "White") + " wins."
+        elif board.is_stalemate():
+            game_status = "Stalemate - Draw"
+        elif board.is_insufficient_material():
+            game_status = "Insufficient material - Draw"
         else:
-            # Fallback to material evaluation
-            elements.append(ui.h5("📊 Material Evaluation"))
-            
-            if game_status == "Game Over":
-                eval_score = "Game Over"
-            else:
-                eval_score = f"{material_diff:+.1f}"
-            
-            if material_diff > 3:
-                assessment = "White has a significant material advantage"
-            elif material_diff < -3:
-                assessment = "Black has a significant material advantage"
-            elif material_diff > 0:
-                assessment = "White has a slight material advantage"
-            elif material_diff < 0:
-                assessment = "Black has a slight material advantage"
-            else:
-                assessment = "Material is equal"
-            
-            elements.extend([
-                ui.p(ui.strong("Material Balance: "), eval_score + " pawns"),
-                ui.p(ui.strong("Assessment: "), assessment),
-                ui.hr(),
-                ui.h5("Piece Count:"),
-                ui.p(f"White: {white_material} points"),
-                ui.p(f"Black: {black_material} points"),
-                ui.hr(),
-                ui.p(
-                    ui.em("⚠️ Lichess Cloud Analysis not available for this position. "),
-                    ui.em("Showing material count instead."),
-                    style="font-size: 0.9em; color: #666;"
-                )
-            ])
+            game_status = "Game in progress"
         
-        return ui.div(*elements)
+        return ui.div(
+            ui.h4("⚡ Chess-WASM Engine Analysis"),
+            ui.p(ui.strong("Game Status: "), game_status),
+            ui.p(ui.strong("Current Position: "), fen),
+            ui.hr(),
+            ui.markdown(
+                """
+                **Instructions:**
+                1. Click the "Run Chess-WASM" button to analyze the current position
+                2. The lightweight WebAssembly engine will evaluate the position
+                3. Results appear in 1-3 seconds
+                
+                **About Chess-WASM:**
+                - Lightweight (~100KB) WebAssembly chess engine
+                - Runs entirely in your browser
+                - Good strength, optimized for speed
+                - Analysis depth: 12 (balanced performance)
+                """
+            ),
+            ui.hr(),
+            ui.HTML("""
+                <div id="wasm-results">
+                    <h5>Analysis Results:</h5>
+                    <div style="background-color: #f0f0f0; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                        <p><strong>Engine Status:</strong> <span id="wasm-status">Initializing...</span></p>
+                        <p><strong>Evaluation:</strong> <span id="wasm-eval-score">Click 'Run Chess-WASM' to analyze</span></p>
+                        <p><strong>Best Move (UCI):</strong> <span id="wasm-best-move">-</span></p>
+                    </div>
+                </div>
+                <script>
+                    function updateWasmResults() {
+                        if (typeof isWasmReady === 'function') {
+                            const ready = isWasmReady();
+                            document.getElementById('wasm-status').textContent = ready ? '✓ Ready' : 'Loading...';
+                            
+                            if (ready && typeof getWasmEvaluation === 'function') {
+                                const eval_score = getWasmEvaluation();
+                                document.getElementById('wasm-eval-score').textContent = eval_score;
+                                
+                                // Interpret evaluation
+                                if (eval_score !== 'Ready' && eval_score !== 'Initializing...' && eval_score !== 'Analyzing...') {
+                                    try {
+                                        const score = parseFloat(eval_score);
+                                        let interpretation = '';
+                                        if (score > 2) interpretation = ' (White is winning)';
+                                        else if (score > 0.5) interpretation = ' (White is better)';
+                                        else if (score < -2) interpretation = ' (Black is winning)';
+                                        else if (score < -0.5) interpretation = ' (Black is better)';
+                                        else interpretation = ' (Equal position)';
+                                        
+                                        document.getElementById('wasm-eval-score').textContent = eval_score + interpretation;
+                                    } catch (e) {}
+                                }
+                            }
+                            
+                            if (typeof getWasmBestMove === 'function') {
+                                const best_move = getWasmBestMove();
+                                document.getElementById('wasm-best-move').textContent = best_move || '-';
+                            }
+                        }
+                    }
+                    setInterval(updateWasmResults, 500);
+                </script>
+            """),
+            ui.hr(),
+            ui.h5("Material Balance (Reference):"),
+            ui.p(f"White: {white_material} points | Black: {black_material} points | Difference: {material_diff:+.1f}"),
+            ui.hr(),
+            ui.p(
+                ui.em("Note: Chess-WASM is a lightweight engine (~100KB) optimized for browser use. "),
+                ui.em("For stronger analysis, consider using Lichess Cloud API or Stockfish.js."),
+                style="font-size: 0.9em; color: #666;"
+            )
+        )
     
     @output
     @render.ui
@@ -394,11 +415,9 @@ def server(input, output, session):
                 ui.p("No more moves available.")
             )
         
-        # Get FEN for API request
         fen = board.fen()
         
         try:
-            # Call Lichess API for popular moves
             response = requests.get(
                 "https://explorer.lichess.ovh/lichess",
                 params={
@@ -420,12 +439,11 @@ def server(input, output, session):
                     ui.p("No data available for next moves in this position.")
                 )
             
-            # Sort by number of games played
             moves_data.sort(key=lambda x: x.get("white", 0) + x.get("draws", 0) + x.get("black", 0), reverse=True)
             
             move_elements = [ui.h4("Popular Next Moves (from Lichess Database)")]
             
-            for i, move_info in enumerate(moves_data[:10], 1):  # Top 10 moves
+            for i, move_info in enumerate(moves_data[:10], 1):
                 san = move_info.get("san", "?")
                 white = move_info.get("white", 0)
                 draws = move_info.get("draws", 0)
