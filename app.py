@@ -177,16 +177,16 @@ def server(input, output, session):
                 ui.hr(),
                 ui.div(
                     ui.div(
-                        style=f"width: {white_pct}%; background-color: #fff; border: 1px solid #000; display: inline-block; padding: 5px; text-align: center;",
-                        children=[f"White {white_pct:.0f}%"]
+                        f"White {white_pct:.0f}%",
+                        style=f"width: {white_pct}%; background-color: #fff; border: 1px solid #000; display: inline-block; padding: 5px; text-align: center;"
                     ),
                     ui.div(
-                        style=f"width: {draw_pct}%; background-color: #888; border: 1px solid #000; display: inline-block; padding: 5px; text-align: center;",
-                        children=[f"Draw {draw_pct:.0f}%"]
+                        f"Draw {draw_pct:.0f}%",
+                        style=f"width: {draw_pct}%; background-color: #888; border: 1px solid #000; display: inline-block; padding: 5px; text-align: center;"
                     ),
                     ui.div(
-                        style=f"width: {black_pct}%; background-color: #000; color: #fff; border: 1px solid #000; display: inline-block; padding: 5px; text-align: center;",
-                        children=[f"Black {black_pct:.0f}%"]
+                        f"Black {black_pct:.0f}%",
+                        style=f"width: {black_pct}%; background-color: #000; color: #fff; border: 1px solid #000; display: inline-block; padding: 5px; text-align: center;"
                     )
                 )
             )
