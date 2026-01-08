@@ -1,671 +1,782 @@
-from shiny import App, render, ui, reactive
+from shiny import App, ui, render, reactive
 import chess
-import chess.svg
-import requests
-import json
-from pathlib import Path
+import chess.pgn
+from typing import Dict, Any
+import asyncio
+import sys
 
-# JavaScript for interactive chess board using chessboard.js
-interactive_board_js = """
-<link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+# Conditional imports for Pyodide vs local development
+try:
+    import js  # Available in Shinylive/Pyodide
+    IN_BROWSER = True
+except ImportError:
+    import httpx  # Use for local development
+    IN_BROWSER = False
 
+# Preset openings for quick selection
+PRESETS = {
+    "Italian Game": "e4 e5 Nf3 Nc6 Bc4",
+    "Sicilian Defense": "e4 c5",
+    "French Defense": "e4 e6",
+    "Queen's Gambit": "d4 d5 c4",
+    "King's Indian": "d4 Nf6 c4 g6",
+    "Ruy Lopez": "e4 e5 Nf3 Nc6 Bb5",
+}
+
+# Custom CSS for styling
+custom_css = """
 <style>
-    #myBoard {
-        width: 500px;
-        margin: 20px auto;
-    }
-    .highlight-square {
-        box-shadow: inset 0 0 3px 3px yellow;
-    }
-    .move-hint {
-        background: radial-gradient(circle, rgba(0,255,0,0.3) 25%, transparent 25%);
-    }
-    /* Override piece image paths to use CDN */
-    .piece-417db {
-        background-image: none !important;
-    }
+.eval-bar {
+    height: 30px;
+    background: linear-gradient(to right, #000 0%, #000 50%, #fff 50%, #fff 100%);
+    border: 2px solid #333;
+    border-radius: 5px;
+    position: relative;
+    margin: 10px 0;
+}
+.eval-indicator {
+    position: absolute;
+    height: 100%;
+    background-color: #4CAF50;
+    transition: left 0.3s ease;
+    border-radius: 3px;
+}
+.metric-card {
+    padding: 10px;
+    margin: 5px 0;
+    border-radius: 5px;
+    background-color: #f8f9fa;
+}
+.better {
+    background-color: #d4edda !important;
+    border-left: 4px solid #28a745;
+}
+.worse {
+    background-color: #f8d7da !important;
+    border-left: 4px solid #dc3545;
+}
+.board-container {
+    max-width: 400px;
+    margin: 10px auto;
+}
+.move-history {
+    font-family: monospace;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    max-height: 100px;
+    overflow-y: auto;
+    margin-top: 10px;
+}
+.loading {
+    text-align: center;
+    padding: 20px;
+    color: #6c757d;
+}
+.welcome-section {
+    background-color: #e7f3ff;
+    padding: 20px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    border-left: 5px solid #007bff;
+}
 </style>
+"""
 
+# Chess board JavaScript integration
+chessboard_js = """
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+<script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
 <script>
-var board = null;
-var game = new Chess();
-var squareToHighlight = null;
-var squareClass = 'highlight-square';
+console.log('Chessboard scripts loaded');
 
-function removeHighlights() {
-    $('#myBoard .square-55d63').removeClass('highlight-square');
-    $('#myBoard .square-55d63').removeClass('move-hint');
-}
-
-function highlightSquare(square) {
-    var $square = $('#myBoard .square-' + square);
-    $square.addClass(squareClass);
-}
-
-function showMoveHints(square) {
-    var moves = game.moves({
-        square: square,
-        verbose: true
-    });
+// Initialize boards after page load
+window.addEventListener('load', function() {
+    console.log('Window loaded, checking for Chessboard...');
+    console.log('Chessboard available:', typeof Chessboard !== 'undefined');
+    console.log('jQuery available:', typeof $ !== 'undefined');
+    console.log('boardA element:', document.getElementById('boardA'));
+    console.log('boardB element:', document.getElementById('boardB'));
     
-    // Highlight valid move squares
-    for (var i = 0; i < moves.length; i++) {
-        $('#myBoard .square-' + moves[i].to).addClass('move-hint');
-    }
-}
-
-function onDragStart(source, piece, position, orientation) {
-    // Don't allow moves if game is over
-    if (game.game_over()) return false;
-    
-    // Only allow moves for the side to move
-    if ((game.turn() === 'w' && piece.search(/^b/) !== -1) ||
-        (game.turn() === 'b' && piece.search(/^w/) !== -1)) {
-        return false;
-    }
-}
-
-function onDrop(source, target) {
-    removeHighlights();
-    
-    // Try to make the move
-    var move = game.move({
-        from: source,
-        to: target,
-        promotion: 'q' // Always promote to queen for simplicity
-    });
-    
-    // Invalid move
-    if (move === null) return 'snapback';
-    
-    // Update move list in Shiny
-    updateShinyMoves();
-}
-
-function onMouseoverSquare(square, piece) {
-    // Show hints for valid moves
-    if (piece) {
-        removeHighlights();
-        showMoveHints(square);
-    }
-}
-
-function onMouseoutSquare(square, piece) {
-    removeHighlights();
-}
-
-function onSnapEnd() {
-    board.position(game.fen());
-}
-
-function updateShinyMoves() {
-    // Get move history in SAN notation
-    var history = game.history();
-    var movesText = history.join(' ');
-    
-    // Update Shiny input
-    Shiny.setInputValue('board_moves', movesText, {priority: 'event'});
-}
-
-function loadPosition(fen) {
-    game.load(fen);
-    board.position(fen);
-}
-
-function resetBoard() {
-    game.reset();
-    board.start();
-    updateShinyMoves();
-}
-
-// Initialize board
-var config = {
-    draggable: true,
-    position: 'start',
-    onDragStart: onDragStart,
-    onDrop: onDrop,
-    onMouseoutSquare: onMouseoutSquare,
-    onMouseoverSquare: onMouseoverSquare,
-    onSnapEnd: onSnapEnd,
-    pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
-};
-
-$(document).ready(function() {
-    board = Chessboard('myBoard', config);
+    // Wait a bit for Shiny to be ready
+    setTimeout(function() {
+        console.log('Attempting to initialize boards...');
+        
+        try {
+            if (document.getElementById('boardA')) {
+                window.boardA = Chessboard('boardA', {
+                    position: 'start',
+                    draggable: true,
+                    pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+                    onDrop: function(source, target) {
+                        console.log('Move attempted:', source, target);
+                        if (typeof Shiny !== 'undefined') {
+                            Shiny.setInputValue('boardA_move', source + target, {priority: 'event'});
+                        }
+                        return 'snapback';
+                    }
+                });
+                console.log('✓ Board A initialized successfully');
+            } else {
+                console.error('✗ boardA element not found');
+            }
+        } catch(e) {
+            console.error('✗ Error initializing boardA:', e);
+        }
+        
+        try {
+            if (document.getElementById('boardB')) {
+                window.boardB = Chessboard('boardB', {
+                    position: 'start',
+                    draggable: true,
+                    pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+                    onDrop: function(source, target) {
+                        console.log('Move attempted:', source, target);
+                        if (typeof Shiny !== 'undefined') {
+                            Shiny.setInputValue('boardB_move', source + target, {priority: 'event'});
+                        }
+                        return 'snapback';
+                    }
+                });
+                console.log('✓ Board B initialized successfully');
+            } else {
+                console.error('✗ boardB element not found');
+            }
+        } catch(e) {
+            console.error('✗ Error initializing boardB:', e);
+        }
+    }, 1000);
 });
 
-// Expose functions to Shiny
-window.loadPosition = loadPosition;
-window.resetBoard = resetBoard;
+// Handle custom messages from server to update board positions
+if (typeof Shiny !== 'undefined') {
+    Shiny.addCustomMessageHandler('update_board', function(message) {
+        console.log('Update board message received:', message);
+        if (message.board === 'boardA' && window.boardA) {
+            try {
+                window.boardA.position(message.fen);
+                console.log('Board A position updated');
+            } catch(e) {
+                console.error('Error updating boardA:', e);
+            }
+        } else if (message.board === 'boardB' && window.boardB) {
+            try {
+                window.boardB.position(message.fen);
+                console.log('Board B position updated');
+            } catch(e) {
+                console.error('Error updating boardB:', e);
+            }
+        }
+    });
+}
 </script>
 """
 
 app_ui = ui.page_fluid(
-    ui.head_content(
-        ui.HTML(interactive_board_js)
-    ),
-    ui.panel_title("♟️ Interactive Chess Opening Explorer"),
-    ui.markdown(
-        """
-        **Click and drag pieces** on the board to make moves, or enter them manually below.
-        Explore opening statistics and get **real Stockfish evaluation** via Lichess Cloud Analysis.
-        """
-    ),
-    ui.layout_sidebar(
-        ui.sidebar(
-            ui.input_text_area(
-                "moves",
-                "Current moves:",
-                value="",
-                rows=3,
-                width="100%"
-            ),
-            ui.input_action_button("apply_moves", "Apply Moves", class_="btn-primary"),
-            ui.input_action_button("reset", "Reset Board", class_="btn-secondary"),
-            ui.hr(),
-            ui.markdown("**Quick Start Examples:**"),
-            ui.input_action_button("italian", "Italian Game", class_="btn-sm"),
-            ui.input_action_button("sicilian", "Sicilian Defense", class_="btn-sm"),
-            ui.input_action_button("french", "French Defense", class_="btn-sm"),
-            ui.hr(),
-            ui.markdown("**Tips:**"),
-            ui.markdown(
-                """
-                - Drag pieces to make moves
-                - Green dots show valid moves
-                - Yellow highlights show last move
-                - Auto-promotes to Queen
-                """
-            ),
-            width=300
+    ui.HTML(custom_css),
+    ui.HTML(chessboard_js),
+    
+    # Welcome Section
+    ui.div(
+        {"class": "welcome-section"},
+        ui.h2("♟️ Chess Opening A/B Testing Tool"),
+        ui.p(
+            "Compare two chess openings side-by-side with comprehensive statistics and evaluations. "
+            "Enter moves in algebraic notation (e.g., 'e4 e5 Nf3'), use preset buttons, or drag pieces on the board."
         ),
-        ui.navset_tab(
-            ui.nav_panel(
-                "Interactive Board",
-                ui.HTML('<div id="myBoard"></div>'),
-                ui.output_text_verbatim("move_history")
+        ui.p(
+            ui.strong("Metrics: "),
+            "Win/Draw/Loss rates from Lichess database, Stockfish cloud evaluation, "
+            "popular continuations, and direct comparison highlights."
+        ),
+    ),
+    
+    # Two-column comparison layout
+    ui.layout_columns(
+        # Left Column - Opening A
+        ui.card(
+            ui.card_header(
+                ui.h3("Opening A", style="margin: 0;")
             ),
-            ui.nav_panel(
-                "Opening Statistics",
-                ui.output_ui("opening_stats")
+            
+            # Preset buttons
+            ui.div(
+                ui.strong("Quick Presets:"),
+                style="margin-bottom: 10px;"
             ),
-            ui.nav_panel(
-                "Position Evaluation",
-                ui.output_ui("evaluation")
+            ui.div(
+                *[ui.input_action_button(f"preset_a_{i}", name, style="margin: 2px;") 
+                  for i, name in enumerate(PRESETS.keys())],
+                style="margin-bottom: 15px;"
             ),
-            ui.nav_panel(
-                "Popular Next Moves",
-                ui.output_ui("next_moves")
-            )
-        )
-    )
+            
+            # Move input
+            ui.input_text("moves_a", "Enter moves (algebraic notation):", 
+                         placeholder="e.g., e4 e5 Nf3 Nc6"),
+            ui.input_action_button("analyze_a", "Analyze Opening A", class_="btn-primary"),
+            
+            # Chess board
+            ui.div(
+                {"class": "board-container"},
+                ui.HTML('<div id="boardA" style="width: 400px; height: 400px;"></div>'),
+            ),
+            
+            # Move history
+            ui.output_ui("move_history_a"),
+            
+            # Stats and evaluation
+            ui.output_ui("stats_a"),
+            ui.output_ui("eval_a"),
+        ),
+        
+        # Right Column - Opening B
+        ui.card(
+            ui.card_header(
+                ui.h3("Opening B", style="margin: 0;")
+            ),
+            
+            # Preset buttons
+            ui.div(
+                ui.strong("Quick Presets:"),
+                style="margin-bottom: 10px;"
+            ),
+            ui.div(
+                *[ui.input_action_button(f"preset_b_{i}", name, style="margin: 2px;") 
+                  for i, name in enumerate(PRESETS.keys())],
+                style="margin-bottom: 15px;"
+            ),
+            
+            # Move input
+            ui.input_text("moves_b", "Enter moves (algebraic notation):", 
+                         placeholder="e.g., d4 d5 c4"),
+            ui.input_action_button("analyze_b", "Analyze Opening B", class_="btn-primary"),
+            
+            # Chess board
+            ui.div(
+                {"class": "board-container"},
+                ui.HTML('<div id="boardB" style="width: 400px; height: 400px;"></div>'),
+            ),
+            
+            # Move history
+            ui.output_ui("move_history_b"),
+            
+            # Stats and evaluation
+            ui.output_ui("stats_b"),
+            ui.output_ui("eval_b"),
+        ),
+        col_widths=[6, 6],
+    ),
+    
+    # Comparison section
+    ui.card(
+        ui.card_header(ui.h3("Direct Comparison")),
+        ui.output_ui("comparison"),
+    ),
 )
 
 
 def server(input, output, session):
-    board_state = reactive.Value(chess.Board())
-    update_trigger = reactive.Value(0)  # Trigger to force updates across all tabs
+    # Reactive values for board states
+    board_a = reactive.Value(chess.Board())
+    board_b = reactive.Value(chess.Board())
     
-    # Reactive value to track board moves from JavaScript
+    # Reactive values for API data
+    stats_a_data = reactive.Value({})
+    stats_b_data = reactive.Value({})
+    eval_a_data = reactive.Value({})
+    eval_b_data = reactive.Value({})
+    
+    # Track if boards are initialized
+    boards_initialized = reactive.Value(False)
+    
     @reactive.Effect
-    def _():
-        if hasattr(input, 'board_moves') and input.board_moves():
-            moves_text = input.board_moves()
-            ui.update_text("moves", value=moves_text)
+    async def _init_boards():
+        if not boards_initialized():
+            await session.send_custom_message(
+                "init_boards",
+                {
+                    "boardA_fen": board_a().fen(),
+                    "boardB_fen": board_b().fen()
+                }
+            )
+            boards_initialized.set(True)
+    
+    # Preset button handlers for Opening A
+    for i, (name, moves) in enumerate(PRESETS.items()):
+        @reactive.Effect
+        @reactive.event(input[f"preset_a_{i}"])
+        def _preset_a(moves=moves):
+            ui.update_text("moves_a", value=moves)
+    
+    # Preset button handlers for Opening B
+    for i, (name, moves) in enumerate(PRESETS.items()):
+        @reactive.Effect
+        @reactive.event(input[f"preset_b_{i}"])
+        def _preset_b(moves=moves):
+            ui.update_text("moves_b", value=moves)
+    
+    # Listen for board drag moves and apply if legal
+    @reactive.Effect
+    @reactive.event(input.boardA_move)
+    async def _on_board_a_move():
+        move_str = input.boardA_move()
+        if not move_str:
+            return
+        try:
+            mv = chess.Move.from_uci(move_str)
+            b = board_a().copy()
+            if mv in b.legal_moves:
+                b.push(mv)
+                board_a.set(b)
+                # Update the visual board
+                await session.send_custom_message(
+                    "update_board",
+                    {"board": "boardA", "fen": b.fen()}
+                )
+                # Update text input with move history
+                moves = []
+                temp = chess.Board()
+                for move in b.move_stack:
+                    moves.append(temp.san(move))
+                    temp.push(move)
+                ui.update_text("moves_a", value=" ".join(moves))
+        except Exception:
+            pass
+    
+    @reactive.Effect
+    @reactive.event(input.boardB_move)
+    async def _on_board_b_move():
+        move_str = input.boardB_move()
+        if not move_str:
+            return
+        try:
+            mv = chess.Move.from_uci(move_str)
+            b = board_b().copy()
+            if mv in b.legal_moves:
+                b.push(mv)
+                board_b.set(b)
+                # Update the visual board
+                await session.send_custom_message(
+                    "update_board",
+                    {"board": "boardB", "fen": b.fen()}
+                )
+                # Update text input with move history
+                moves = []
+                temp = chess.Board()
+                for move in b.move_stack:
+                    moves.append(temp.san(move))
+                    temp.push(move)
+                ui.update_text("moves_b", value=" ".join(moves))
+        except Exception:
+            pass
+    
+    def parse_moves(move_string: str) -> chess.Board:
+        """Parse algebraic notation moves and return board state."""
+        board = chess.Board()
+        if not move_string.strip():
+            return board
+        
+        try:
+            moves = move_string.strip().split()
+            for move_san in moves:
+                move = board.parse_san(move_san)
+                board.push(move)
+            return board
+        except (chess.InvalidMoveError, chess.IllegalMoveError, chess.AmbiguousMoveError) as e:
+            raise ValueError(f"Invalid move sequence: {e}")
+    
+    # Analyze Opening A
+    @reactive.Effect
+    @reactive.event(input.analyze_a)
+    async def _analyze_a():
+        try:
+            new_board = parse_moves(input.moves_a())
+            board_a.set(new_board)
             
-            # Update board state
-            board = chess.Board()
-            if moves_text:
-                moves = moves_text.split()
-                try:
-                    for move_san in moves:
-                        move = board.parse_san(move_san)
-                        board.push(move)
-                    board_state.set(board)
-                except ValueError:
-                    pass
+            # Update board position
+            await session.send_custom_message(
+                "update_board",
+                {"board": "boardA", "fen": new_board.fen()}
+            )
+            
+            # Fetch stats and evaluation
+            fen = new_board.fen()
+            stats_task = fetch_lichess_stats(fen)
+            eval_task = fetch_cloud_eval(fen)
+            
+            stats, evaluation = await asyncio.gather(stats_task, eval_task)
+            stats_a_data.set(stats)
+            eval_a_data.set(evaluation)
+            
+        except ValueError as e:
+            stats_a_data.set({"error": str(e)})
+            eval_a_data.set({})
     
+    # Analyze Opening B
     @reactive.Effect
-    @reactive.event(input.italian)
-    def _():
-        moves = "e4 e5 Nf3 Nc6 Bc4"
-        ui.update_text("moves", value=moves)
-        board = chess.Board()
-        for move_san in moves.split():
-            board.push(board.parse_san(move_san))
-        board_state.set(board)
-        update_trigger.set(update_trigger.get() + 1)  # Force update
-        fen = board.fen()
-        ui.insert_ui(
-            ui.HTML(f'<script>if (window.loadPosition) loadPosition("{fen}");</script>'),
-            selector="body",
-            where="beforeEnd"
-        )
+    @reactive.event(input.analyze_b)
+    async def _analyze_b():
+        try:
+            new_board = parse_moves(input.moves_b())
+            board_b.set(new_board)
+            
+            # Update board position
+            await session.send_custom_message(
+                "update_board",
+                {"board": "boardB", "fen": new_board.fen()}
+            )
+            
+            # Fetch stats and evaluation
+            fen = new_board.fen()
+            stats_task = fetch_lichess_stats(fen)
+            eval_task = fetch_cloud_eval(fen)
+            
+            stats, evaluation = await asyncio.gather(stats_task, eval_task)
+            stats_b_data.set(stats)
+            eval_b_data.set(evaluation)
+            
+        except ValueError as e:
+            stats_b_data.set({"error": str(e)})
+            eval_b_data.set({})
     
-    @reactive.Effect
-    @reactive.event(input.sicilian)
-    def _():
-        moves = "e4 c5 Nf3 d6 d4"
-        ui.update_text("moves", value=moves)
-        board = chess.Board()
-        for move_san in moves.split():
-            board.push(board.parse_san(move_san))
-        board_state.set(board)
-        update_trigger.set(update_trigger.get() + 1)  # Force update
-        fen = board.fen()
-        ui.insert_ui(
-            ui.HTML(f'<script>if (window.loadPosition) loadPosition("{fen}");</script>'),
-            selector="body",
-            where="beforeEnd"
-        )
+    async def fetch_lichess_stats(fen: str) -> Dict[str, Any]:
+        """Fetch opening statistics from Lichess Explorer API."""
+        try:
+            base_url = "https://explorer.lichess.ovh/lichess"
+            params = {
+                "fen": fen,
+                "speeds": "blitz,rapid,classical",
+                "ratings": "1600,1800,2000,2200,2500",
+            }
+            
+            if IN_BROWSER:
+                # Use js.fetch in Shinylive/Pyodide
+                query_parts = []
+                for key, value in params.items():
+                    encoded_value = await js.encodeURIComponent(value)
+                    query_parts.append(f"{key}={encoded_value}")
+                query = "&".join(query_parts)
+                
+                url = f"{base_url}?{query}"
+                response = await js.fetch(url)
+                
+                if not response.ok:
+                    return {"error": f"HTTP {response.status}"}
+                
+                data = await response.json()
+                return data.to_py()
+            else:
+                # Use httpx for local development
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(base_url, params=params, timeout=10.0)
+                    response.raise_for_status()
+                    return response.json()
+            
+        except Exception as e:
+            return {"error": str(e)}
     
-    @reactive.Effect
-    @reactive.event(input.french)
-    def _():
-        moves = "e4 e6 d4 d5"
-        ui.update_text("moves", value=moves)
-        board = chess.Board()
-        for move_san in moves.split():
-            board.push(board.parse_san(move_san))
-        board_state.set(board)
-        update_trigger.set(update_trigger.get() + 1)  # Force update
-        fen = board.fen()
-        ui.insert_ui(
-            ui.HTML(f'<script>if (window.loadPosition) loadPosition("{fen}");</script>'),
-            selector="body",
-            where="beforeEnd"
-        )
-    
-    @reactive.Effect
-    @reactive.event(input.reset)
-    def _():
-        board_state.set(chess.Board())
-        update_trigger.set(update_trigger.get() + 1)  # Force update
-        ui.update_text("moves", value="")
-        ui.insert_ui(
-            ui.HTML('<script>if (window.resetBoard) resetBoard();</script>'),
-            selector="body",
-            where="beforeEnd"
-        )
-    
-    @reactive.Effect
-    @reactive.event(input.apply_moves)
-    def _():
-        moves_text = input.moves().strip()
-        board = chess.Board()
-        if moves_text:
-            moves = moves_text.split()
-            try:
-                for move_san in moves:
-                    move = board.parse_san(move_san)
-                    board.push(move)
-            except ValueError as e:
-                pass
-        
-        # Update board state (this will trigger reactive outputs)
-        board_state.set(board)
-        update_trigger.set(update_trigger.get() + 1)  # Force update
-        
-        # Update JavaScript board
-        fen = board.fen()
-        ui.insert_ui(
-            ui.HTML(f'<script>if (window.loadPosition) loadPosition("{fen}");</script>'),
-            selector="body",
-            where="beforeEnd"
-        )
+    async def fetch_cloud_eval(fen: str) -> Dict[str, Any]:
+        """Fetch position evaluation from Lichess Cloud Eval API."""
+        try:
+            base_url = "https://lichess.org/api/cloud-eval"
+            
+            if IN_BROWSER:
+                # Use js.fetch in Shinylive/Pyodide
+                encoded_fen = await js.encodeURIComponent(fen)
+                url = f"{base_url}?fen={encoded_fen}&multiPv=1"
+                
+                response = await js.fetch(url)
+                
+                if not response.ok:
+                    return {"error": f"HTTP {response.status}"}
+                
+                data = await response.json()
+                return data.to_py()
+            else:
+                # Use httpx for local development
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        base_url,
+                        params={"fen": fen, "multiPv": "1"},
+                        timeout=10.0
+                    )
+                    response.raise_for_status()
+                    return response.json()
+            
+        except Exception as e:
+            return {"error": str(e)}
     
     @output
-    @render.text
-    def move_history():
-        update_trigger.get()  # Create dependency on trigger
-        board = board_state.get()
-        if len(board.move_stack) == 0:
-            return "No moves played yet. Starting position.\n\nClick and drag pieces on the board to make moves!"
-        
-        moves_text = []
+    @render.ui
+    def move_history_a():
+        board = board_a()
+        moves = []
         temp_board = chess.Board()
+        
         for i, move in enumerate(board.move_stack):
+            move_num = (i // 2) + 1
             if i % 2 == 0:
-                moves_text.append(f"{i//2 + 1}. {temp_board.san(move)}")
+                moves.append(f"{move_num}. {temp_board.san(move)}")
             else:
-                moves_text[-1] += f" {temp_board.san(move)}"
+                moves.append(temp_board.san(move))
             temp_board.push(move)
         
-        result = "Move History:\n" + " ".join(moves_text)
-        
-        # Add game status
-        if board.is_checkmate():
-            result += "\n\n🏁 CHECKMATE! " + ("Black" if board.turn else "White") + " wins!"
-        elif board.is_stalemate():
-            result += "\n\n🤝 STALEMATE - Draw"
-        elif board.is_check():
-            result += "\n\n⚠️ CHECK!"
-        
-        return result
+        history = " ".join(moves) if moves else "Starting position"
+        return ui.div(
+            {"class": "move-history"},
+            ui.strong("Moves: "),
+            history
+        )
     
     @output
     @render.ui
-    def opening_stats():
-        update_trigger.get()  # Create dependency on trigger
-        board = board_state.get()
-        fen = board.fen()
+    def move_history_b():
+        board = board_b()
+        moves = []
+        temp_board = chess.Board()
         
-        try:
-            response = requests.get(
-                "https://explorer.lichess.ovh/lichess",
-                params={
-                    "fen": fen,
-                    "variant": "standard",
-                    "speeds": "blitz,rapid,classical",
-                    "ratings": "2000,2200,2500"
-                },
-                timeout=5
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            white_wins = data.get("white", 0)
-            draws = data.get("draws", 0)
-            black_wins = data.get("black", 0)
-            total_games = white_wins + draws + black_wins
-            
-            if total_games == 0:
-                return ui.div(
-                    ui.h4("No Statistics Available"),
-                    ui.p("This position has not been reached in the Lichess database.")
-                )
-            
-            white_pct = (white_wins / total_games * 100) if total_games > 0 else 0
-            draw_pct = (draws / total_games * 100) if total_games > 0 else 0
-            black_pct = (black_wins / total_games * 100) if total_games > 0 else 0
-            
-            opening_name = data.get("opening", {}).get("name", "Unknown Opening")
-            
-            return ui.div(
-                ui.h4("Lichess Database Statistics"),
-                ui.p(ui.strong("Opening: "), opening_name),
-                ui.p(ui.strong("Total Games: "), f"{total_games:,}"),
-                ui.hr(),
-                ui.h5("Results:"),
-                ui.div(
-                    ui.p(f"White wins: {white_wins:,} ({white_pct:.1f}%)"),
-                    ui.p(f"Draws: {draws:,} ({draw_pct:.1f}%)"),
-                    ui.p(f"Black wins: {black_wins:,} ({black_pct:.1f}%)"),
-                ),
-                ui.hr(),
-                ui.div(
-                    ui.div(
-                        f"White {white_pct:.0f}%",
-                        style=f"width: {white_pct}%; background-color: #fff; border: 1px solid #000; display: inline-block; padding: 5px; text-align: center;"
-                    ),
-                    ui.div(
-                        f"Draw {draw_pct:.0f}%",
-                        style=f"width: {draw_pct}%; background-color: #888; border: 1px solid #000; display: inline-block; padding: 5px; text-align: center;"
-                    ),
-                    ui.div(
-                        f"Black {black_pct:.0f}%",
-                        style=f"width: {black_pct}%; background-color: #000; color: #fff; border: 1px solid #000; display: inline-block; padding: 5px; text-align: center;"
-                    )
-                )
-            )
-            
-        except requests.RequestException as e:
-            return ui.div(
-                ui.h4("Error Loading Statistics"),
-                ui.p(f"Could not fetch data from Lichess API: {str(e)}")
-            )
+        for i, move in enumerate(board.move_stack):
+            move_num = (i // 2) + 1
+            if i % 2 == 0:
+                moves.append(f"{move_num}. {temp_board.san(move)}")
+            else:
+                moves.append(temp_board.san(move))
+            temp_board.push(move)
+        
+        history = " ".join(moves) if moves else "Starting position"
+        return ui.div(
+            {"class": "move-history"},
+            ui.strong("Moves: "),
+            history
+        )
     
     @output
     @render.ui
-    def evaluation():
-        update_trigger.get()  # Create dependency on trigger
-        board = board_state.get()
-        fen = board.fen()
+    def stats_a():
+        data = stats_a_data()
+        if not data:
+            return ui.div({"class": "loading"}, "Click 'Analyze Opening A' to load statistics")
         
-        # Check game state first
-        if board.is_checkmate():
-            result = "Checkmate! " + ("Black" if board.turn else "White") + " wins."
-            game_status = "Game Over"
-        elif board.is_stalemate():
-            result = "Stalemate - Draw"
-            game_status = "Game Over"
-        elif board.is_insufficient_material():
-            result = "Insufficient material - Draw"
-            game_status = "Game Over"
-        else:
-            result = "Game in progress"
-            game_status = "Active"
+        if "error" in data:
+            return ui.div(f"❌ Error: {data['error']}", style="color: red; padding: 10px;")
         
-        # Try to get Lichess Cloud Evaluation
-        cloud_eval = None
+        total_games = data.get("white", 0) + data.get("draws", 0) + data.get("black", 0)
+        if total_games == 0:
+            return ui.div("No games found for this position", style="padding: 10px;")
         
-        try:
-            response = requests.get(
-                "https://lichess.org/api/cloud-eval",
-                params={
-                    "fen": fen,
-                    "multiPv": 3
-                },
-                timeout=5
-            )
-            
-            if response.status_code == 200:
-                cloud_eval = response.json()
-        except:
-            pass
+        white_pct = round(data.get("white", 0) / total_games * 100, 1)
+        draw_pct = round(data.get("draws", 0) / total_games * 100, 1)
+        black_pct = round(data.get("black", 0) / total_games * 100, 1)
         
-        # Calculate material as fallback
-        piece_values = {
-            chess.PAWN: 1,
-            chess.KNIGHT: 3,
-            chess.BISHOP: 3,
-            chess.ROOK: 5,
-            chess.QUEEN: 9,
-            chess.KING: 0
-        }
+        # Top moves
+        moves = data.get("moves", [])[:5]
+        top_moves_html = ""
+        if moves:
+            top_moves_html = "<div style='margin-top: 10px;'><strong>Popular Moves:</strong><ul style='margin: 5px 0;'>"
+            for m in moves:
+                move_total = m.get("white", 0) + m.get("draws", 0) + m.get("black", 0)
+                top_moves_html += f"<li>{m.get('san', '?')}: {move_total} games</li>"
+            top_moves_html += "</ul></div>"
         
-        white_material = 0
-        black_material = 0
-        
-        for square in chess.SQUARES:
-            piece = board.piece_at(square)
-            if piece:
-                value = piece_values[piece.piece_type]
-                if piece.color == chess.WHITE:
-                    white_material += value
-                else:
-                    black_material += value
-        
-        material_diff = white_material - black_material
-        
-        elements = [
-            ui.h4("Position Evaluation"),
-            ui.p(ui.strong("Status: "), result),
-            ui.p(ui.strong("Game State: "), game_status),
-            ui.hr()
-        ]
-        
-        if cloud_eval and "pvs" in cloud_eval:
-            elements.append(ui.h5("🔥 Lichess Cloud Analysis"))
-            
-            pv_data = cloud_eval["pvs"][0]
-            
-            if "cp" in pv_data:
-                cp = pv_data["cp"]
-                eval_score = f"{cp / 100:+.2f}"
-                eval_pawns = cp / 100
-                
-                if eval_pawns > 2:
-                    assessment = "White has a significant advantage"
-                elif eval_pawns > 0.5:
-                    assessment = "White is slightly better"
-                elif eval_pawns < -2:
-                    assessment = "Black has a significant advantage"
-                elif eval_pawns < -0.5:
-                    assessment = "Black is slightly better"
-                else:
-                    assessment = "Position is approximately equal"
-            elif "mate" in pv_data:
-                mate_in = pv_data["mate"]
-                if mate_in > 0:
-                    eval_score = f"M{mate_in}"
-                    assessment = f"White has mate in {mate_in}"
-                else:
-                    eval_score = f"-M{abs(mate_in)}"
-                    assessment = f"Black has mate in {abs(mate_in)}"
-            else:
-                eval_score = "?"
-                assessment = "Evaluation unavailable"
-            
-            elements.extend([
-                ui.p(ui.strong("Evaluation: "), eval_score),
-                ui.p(ui.strong("Assessment: "), assessment),
-                ui.p(ui.strong("Analysis Depth: "), str(cloud_eval.get("depth", "?"))),
-            ])
-            
-            if len(cloud_eval["pvs"]) > 0:
-                elements.append(ui.h5("Best Moves:"))
-                
-                for i, pv in enumerate(cloud_eval["pvs"][:3], 1):
-                    moves = pv.get("moves", "").split()[:3]
-                    
-                    temp_board = board.copy()
-                    san_moves = []
-                    for uci_move in moves:
-                        try:
-                            move = chess.Move.from_uci(uci_move)
-                            san_moves.append(temp_board.san(move))
-                            temp_board.push(move)
-                        except:
-                            break
-                    
-                    move_line = " ".join(san_moves)
-                    
-                    if "cp" in pv:
-                        move_eval = f"{pv['cp'] / 100:+.2f}"
-                    elif "mate" in pv:
-                        mate_in = pv["mate"]
-                        move_eval = f"M{mate_in}" if mate_in > 0 else f"-M{abs(mate_in)}"
-                    else:
-                        move_eval = "?"
-                    
-                    elements.append(
-                        ui.p(f"{i}. {move_line} ({move_eval})")
-                    )
-            
-            elements.append(
-                ui.p(
-                    ui.em("Source: Lichess Cloud Analysis powered by Stockfish"),
-                    style="font-size: 0.9em; color: #666;"
-                )
-            )
-        else:
-            elements.append(ui.h5("📊 Material Evaluation"))
-            
-            if game_status == "Game Over":
-                eval_score = "Game Over"
-            else:
-                eval_score = f"{material_diff:+.1f}"
-            
-            if material_diff > 3:
-                assessment = "White has a significant material advantage"
-            elif material_diff < -3:
-                assessment = "Black has a significant material advantage"
-            elif material_diff > 0:
-                assessment = "White has a slight material advantage"
-            elif material_diff < 0:
-                assessment = "Black has a slight material advantage"
-            else:
-                assessment = "Material is equal"
-            
-            elements.extend([
-                ui.p(ui.strong("Material Balance: "), eval_score + " pawns"),
-                ui.p(ui.strong("Assessment: "), assessment),
-                ui.hr(),
-                ui.h5("Piece Count:"),
-                ui.p(f"White: {white_material} points"),
-                ui.p(f"Black: {black_material} points"),
-                ui.hr(),
-                ui.p(
-                    ui.em("⚠️ Lichess Cloud Analysis not available for this position. "),
-                    ui.em("Showing material count instead."),
-                    style="font-size: 0.9em; color: #666;"
-                )
-            ])
-        
-        return ui.div(*elements)
+        return ui.HTML(f"""
+            <div class="metric-card">
+                <h5>📊 Opening Statistics</h5>
+                <p><strong>Total Games:</strong> {total_games:,}</p>
+                <p><strong>Results:</strong></p>
+                <ul>
+                    <li>White wins: {white_pct}%</li>
+                    <li>Draws: {draw_pct}%</li>
+                    <li>Black wins: {black_pct}%</li>
+                </ul>
+                {top_moves_html}
+            </div>
+        """)
     
     @output
     @render.ui
-    def next_moves():
-        update_trigger.get()  # Create dependency on trigger
-        board = board_state.get()
+    def stats_b():
+        data = stats_b_data()
+        if not data:
+            return ui.div({"class": "loading"}, "Click 'Analyze Opening B' to load statistics")
         
-        if board.is_game_over():
+        if "error" in data:
+            return ui.div(f"❌ Error: {data['error']}", style="color: red; padding: 10px;")
+        
+        total_games = data.get("white", 0) + data.get("draws", 0) + data.get("black", 0)
+        if total_games == 0:
+            return ui.div("No games found for this position", style="padding: 10px;")
+        
+        white_pct = round(data.get("white", 0) / total_games * 100, 1)
+        draw_pct = round(data.get("draws", 0) / total_games * 100, 1)
+        black_pct = round(data.get("black", 0) / total_games * 100, 1)
+        
+        # Top moves
+        moves = data.get("moves", [])[:5]
+        top_moves_html = ""
+        if moves:
+            top_moves_html = "<div style='margin-top: 10px;'><strong>Popular Moves:</strong><ul style='margin: 5px 0;'>"
+            for m in moves:
+                move_total = m.get("white", 0) + m.get("draws", 0) + m.get("black", 0)
+                top_moves_html += f"<li>{m.get('san', '?')}: {move_total} games</li>"
+            top_moves_html += "</ul></div>"
+        
+        return ui.HTML(f"""
+            <div class="metric-card">
+                <h5>📊 Opening Statistics</h5>
+                <p><strong>Total Games:</strong> {total_games:,}</p>
+                <p><strong>Results:</strong></p>
+                <ul>
+                    <li>White wins: {white_pct}%</li>
+                    <li>Draws: {draw_pct}%</li>
+                    <li>Black wins: {black_pct}%</li>
+                </ul>
+                {top_moves_html}
+            </div>
+        """)
+    
+    @output
+    @render.ui
+    def eval_a():
+        data = eval_a_data()
+        if not data:
+            return ui.div({"class": "loading"}, "Evaluation will appear after analysis")
+        
+        if "error" in data:
+            return ui.div(f"❌ Eval Error: {data['error']}", style="color: red; padding: 10px;")
+        
+        cp = data.get("pvs", [{}])[0].get("cp")
+        if cp is None:
+            return ui.div("Evaluation not available", style="padding: 10px;")
+        
+        # Clamp centipawns and convert to percentage
+        clamped_cp = max(-1000, min(1000, cp))
+        eval_pct = 50 + (clamped_cp / 20)
+        
+        eval_text = f"+{cp/100:.2f}" if cp >= 0 else f"{cp/100:.2f}"
+        depth = data.get("depth", "?")
+        
+        # Best move
+        best_move = "N/A"
+        if data.get("pvs") and data["pvs"][0].get("moves"):
+            uci_move = data["pvs"][0]["moves"].split()[0]
+            try:
+                move = chess.Move.from_uci(uci_move)
+                best_move = board_a().san(move)
+            except:
+                best_move = uci_move
+        
+        return ui.HTML(f"""
+            <div class="metric-card">
+                <h5>🤖 Stockfish Cloud Evaluation</h5>
+                <div class="eval-bar">
+                    <div class="eval-indicator" style="left: {eval_pct}%; width: 2px; background-color: red;"></div>
+                </div>
+                <p><strong>Evaluation:</strong> {eval_text} (depth: {depth})</p>
+                <p><strong>Best Move:</strong> {best_move}</p>
+            </div>
+        """)
+    
+    @output
+    @render.ui
+    def eval_b():
+        data = eval_b_data()
+        if not data:
+            return ui.div({"class": "loading"}, "Evaluation will appear after analysis")
+        
+        if "error" in data:
+            return ui.div(f"❌ Eval Error: {data['error']}", style="color: red; padding: 10px;")
+        
+        cp = data.get("pvs", [{}])[0].get("cp")
+        if cp is None:
+            return ui.div("Evaluation not available", style="padding: 10px;")
+        
+        # Clamp centipawns and convert to percentage
+        clamped_cp = max(-1000, min(1000, cp))
+        eval_pct = 50 + (clamped_cp / 20)
+        
+        eval_text = f"+{cp/100:.2f}" if cp >= 0 else f"{cp/100:.2f}"
+        depth = data.get("depth", "?")
+        
+        # Best move
+        best_move = "N/A"
+        if data.get("pvs") and data["pvs"][0].get("moves"):
+            uci_move = data["pvs"][0]["moves"].split()[0]
+            try:
+                move = chess.Move.from_uci(uci_move)
+                best_move = board_b().san(move)
+            except:
+                best_move = uci_move
+        
+        return ui.HTML(f"""
+            <div class="metric-card">
+                <h5>🤖 Stockfish Cloud Evaluation</h5>
+                <div class="eval-bar">
+                    <div class="eval-indicator" style="left: {eval_pct}%; width: 2px; background-color: red;"></div>
+                </div>
+                <p><strong>Evaluation:</strong> {eval_text} (depth: {depth})</p>
+                <p><strong>Best Move:</strong> {best_move}</p>
+            </div>
+        """)
+    
+    @output
+    @render.ui
+    def comparison():
+        stats_a = stats_a_data()
+        stats_b = stats_b_data()
+        eval_a = eval_a_data()
+        eval_b = eval_b_data()
+        
+        if not stats_a or not stats_b:
             return ui.div(
-                ui.h4("Game Over"),
-                ui.p("No more moves available.")
+                {"class": "loading"},
+                "Analyze both openings to see comparison"
             )
         
-        fen = board.fen()
+        if "error" in stats_a or "error" in stats_b:
+            return ui.div("Complete both analyses to compare", style="padding: 10px;")
         
-        try:
-            response = requests.get(
-                "https://explorer.lichess.ovh/lichess",
-                params={
-                    "fen": fen,
-                    "variant": "standard",
-                    "speeds": "blitz,rapid,classical",
-                    "ratings": "2000,2200,2500"
-                },
-                timeout=5
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            moves_data = data.get("moves", [])
-            
-            if not moves_data:
-                return ui.div(
-                    ui.h4("Popular Next Moves"),
-                    ui.p("No data available for next moves in this position.")
-                )
-            
-            moves_data.sort(key=lambda x: x.get("white", 0) + x.get("draws", 0) + x.get("black", 0), reverse=True)
-            
-            move_elements = [ui.h4("Popular Next Moves (from Lichess Database)")]
-            
-            for i, move_info in enumerate(moves_data[:10], 1):
-                san = move_info.get("san", "?")
-                white = move_info.get("white", 0)
-                draws = move_info.get("draws", 0)
-                black = move_info.get("black", 0)
-                total = white + draws + black
-                
-                if total > 0:
-                    white_pct = (white / total * 100)
-                    draw_pct = (draws / total * 100)
-                    black_pct = (black / total * 100)
-                    
-                    move_elements.append(
-                        ui.div(
-                            ui.h5(f"{i}. {san}"),
-                            ui.p(f"Played {total:,} times"),
-                            ui.p(f"White: {white_pct:.1f}% | Draw: {draw_pct:.1f}% | Black: {black_pct:.1f}%"),
-                            ui.hr()
-                        )
-                    )
-            
-            return ui.div(*move_elements)
-            
-        except requests.RequestException as e:
-            return ui.div(
-                ui.h4("Error Loading Next Moves"),
-                ui.p(f"Could not fetch data from Lichess API: {str(e)}")
-            )
+        # Calculate win rates
+        total_a = stats_a.get("white", 0) + stats_a.get("draws", 0) + stats_a.get("black", 0)
+        total_b = stats_b.get("white", 0) + stats_b.get("draws", 0) + stats_b.get("black", 0)
+        
+        if total_a == 0 or total_b == 0:
+            return ui.div("Insufficient data for comparison", style="padding: 10px;")
+        
+        white_win_a = stats_a.get("white", 0) / total_a * 100
+        white_win_b = stats_b.get("white", 0) / total_b * 100
+        
+        # Evaluations
+        cp_a = eval_a.get("pvs", [{}])[0].get("cp", 0) if eval_a else 0
+        cp_b = eval_b.get("pvs", [{}])[0].get("cp", 0) if eval_b else 0
+        
+        win_rate_class_a = "better" if white_win_a > white_win_b else "worse"
+        win_rate_class_b = "better" if white_win_b > white_win_a else "worse"
+        eval_class_a = "better" if cp_a > cp_b else "worse"
+        eval_class_b = "better" if cp_b > cp_a else "worse"
+        
+        return ui.HTML(f"""
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div class="metric-card {win_rate_class_a}">
+                    <h5>Opening A: White Win Rate</h5>
+                    <h3>{white_win_a:.1f}%</h3>
+                    <small>{total_a:,} games</small>
+                </div>
+                <div class="metric-card {win_rate_class_b}">
+                    <h5>Opening B: White Win Rate</h5>
+                    <h3>{white_win_b:.1f}%</h3>
+                    <small>{total_b:,} games</small>
+                </div>
+                <div class="metric-card {eval_class_a}">
+                    <h5>Opening A: Evaluation</h5>
+                    <h3>{cp_a/100:+.2f}</h3>
+                </div>
+                <div class="metric-card {eval_class_b}">
+                    <h5>Opening B: Evaluation</h5>
+                    <h3>{cp_b/100:+.2f}</h3>
+                </div>
+            </div>
+        """)
 
 
 app = App(app_ui, server)
