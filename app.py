@@ -81,6 +81,65 @@ custom_css = """
     margin-bottom: 20px;
     border-left: 5px solid #007bff;
 }
+.move-selector-panel {
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    border: 2px solid #dee2e6;
+}
+.move-btn {
+    margin: 5px;
+    padding: 10px 15px;
+    border: 2px solid #6c757d;
+    border-radius: 5px;
+    background-color: white;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.move-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+.move-btn.selected-a {
+    background-color: #0dcaf0;
+    border-color: #0dcaf0;
+    color: white;
+    font-weight: bold;
+}
+.move-btn.selected-b {
+    background-color: #198754;
+    border-color: #198754;
+    color: white;
+    font-weight: bold;
+}
+.move-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+.selection-legend {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 10px;
+    font-size: 0.9em;
+}
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.legend-color {
+    width: 20px;
+    height: 20px;
+    border-radius: 3px;
+    border: 1px solid #333;
+}
+.legend-color.color-a {
+    background-color: #0dcaf0;
+}
+.legend-color.color-b {
+    background-color: #198754;
+}
 </style>
 """
 
@@ -186,20 +245,32 @@ app_ui = ui.page_fluid(
             ui.output_ui("position_summary"),
         ),
         
-        # Column 2: Candidate Move A
-        ui.card(
-            ui.card_header(ui.h4("Candidate Move A", style="margin: 0; font-size: 1.1rem;")),
-            ui.output_ui("move_a_selector"),
-            ui.output_ui("move_a_details"),
+        # Column 2-3: Candidate Move Comparison
+        ui.div(
+            # Combined selection panel
+            ui.output_ui("move_selector_panel"),
+            
+            # Two comparison columns
+            ui.layout_columns(
+                # Column 2: Candidate Move A
+                ui.card(
+                    ui.card_header(
+                        ui.h4("Candidate Move A", style="margin: 0; font-size: 1.1rem; color: #0dcaf0;")
+                    ),
+                    ui.output_ui("move_a_details"),
+                ),
+                
+                # Column 3: Candidate Move B
+                ui.card(
+                    ui.card_header(
+                        ui.h4("Candidate Move B", style="margin: 0; font-size: 1.1rem; color: #198754;")
+                    ),
+                    ui.output_ui("move_b_details"),
+                ),
+                col_widths=[6, 6],
+            ),
         ),
-        
-        # Column 3: Candidate Move B
-        ui.card(
-            ui.card_header(ui.h4("Candidate Move B", style="margin: 0; font-size: 1.1rem;")),
-            ui.output_ui("move_b_selector"),
-            ui.output_ui("move_b_details"),
-        ),
-        col_widths=[4, 4, 4],
+        col_widths=[4, 8],
     ),
 )
 
@@ -211,6 +282,10 @@ def server(input, output, session):
     # Reactive values for current position data
     position_stats = reactive.Value({})
     position_eval = reactive.Value({})
+    
+    # Selected candidate moves (stored as SAN strings)
+    selected_move_a = reactive.Value(None)
+    selected_move_b = reactive.Value(None)
     
     # Data for selected moves (fetched lazily)
     move_a_stats = reactive.Value({})
@@ -271,6 +346,8 @@ def server(input, output, session):
         ui.update_text("moves", value="")
         position_stats.set({})
         position_eval.set({})
+        selected_move_a.set(None)
+        selected_move_b.set(None)
         move_a_stats.set({})
         move_a_eval.set({})
         move_b_stats.set({})
@@ -343,6 +420,8 @@ def server(input, output, session):
             position_eval.set(evaluation)
             
             # Clear previous move selections
+            selected_move_a.set(None)
+            selected_move_b.set(None)
             move_a_stats.set({})
             move_a_eval.set({})
             move_b_stats.set({})
@@ -491,68 +570,186 @@ def server(input, output, session):
     
     @output
     @render.ui
-    def move_a_selector():
+    def move_selector_panel():
         board = main_board()
         position_st = position_stats()
         
         # Only show selector if position has been analyzed
         if not position_st:
-            return ui.div(
-                {"class": "loading"},
-                "Analyze position first to see available moves"
+            return ui.card(
+                ui.card_header(ui.h4("📋 Select Candidate Moves", style="margin: 0;")),
+                ui.div(
+                    {"class": "loading"},
+                    "Analyze position first to see available moves"
+                )
             )
         
         if board.is_game_over():
-            return ui.div("Game over - no legal moves")
+            return ui.card(
+                ui.card_header(ui.h4("📋 Select Candidate Moves", style="margin: 0;")),
+                ui.div("Game over - no legal moves")
+            )
         
-        # Get legal moves
-        choices = {}
-        for move in board.legal_moves:
-            san = board.san(move)
-            choices[san] = san
+        # Get legal moves sorted by popularity from stats
+        legal_moves_san = [board.san(move) for move in board.legal_moves]
         
-        return ui.input_select(
-            "selected_move_a",
-            "Select move:",
-            choices=choices,
-            selected=None
+        # Get top moves from position stats if available
+        top_moves = []
+        other_moves = []
+        if position_st and 'moves' in position_st:
+            # Sort moves by total games
+            api_moves = position_st['moves']
+            sorted_api_moves = sorted(
+                api_moves,
+                key=lambda m: m.get('white', 0) + m.get('draws', 0) + m.get('black', 0),
+                reverse=True
+            )[:5]  # Top 5 moves
+            
+            top_moves_san = [m['san'] for m in sorted_api_moves if m['san'] in legal_moves_san]
+            top_moves = top_moves_san[:5]
+            other_moves = [m for m in legal_moves_san if m not in top_moves]
+        else:
+            # If no stats, just show first few moves
+            top_moves = legal_moves_san[:5]
+            other_moves = legal_moves_san[5:]
+        
+        # Current selections
+        move_a = selected_move_a()
+        move_b = selected_move_b()
+        
+        # Create buttons for top moves
+        move_buttons = []
+        for move_san in top_moves:
+            # Determine button class
+            btn_class = "move-btn"
+            if move_san == move_a:
+                btn_class += " selected-a"
+            elif move_san == move_b:
+                btn_class += " selected-b"
+            
+            move_buttons.append(
+                ui.input_action_button(
+                    f"move_btn_{move_san.replace('+', 'p').replace('#', 'h').replace('=', 'e')}",
+                    move_san,
+                    class_=btn_class,
+                    onclick=f"Shiny.setInputValue('move_clicked', '{move_san}', {{priority: 'event'}})"
+                )
+            )
+        
+        # Create dropdown for other moves
+        dropdown_choices = {"---": "(Select other move)"}
+        for move_san in other_moves:
+            dropdown_choices[move_san] = move_san
+        
+        return ui.card(
+            ui.card_header(ui.h4("📋 Select Candidate Moves", style="margin: 0;")),
+            ui.div(
+                {"class": "move-selector-panel"},
+                # Legend
+                ui.div(
+                    {"class": "selection-legend"},
+                    ui.div(
+                        {"class": "legend-item"},
+                        ui.div({"class": "legend-color color-a"}),
+                        ui.span(f"Move A: {move_a if move_a else '(not selected)'}"),
+                    ),
+                    ui.div(
+                        {"class": "legend-item"},
+                        ui.div({"class": "legend-color color-b"}),
+                        ui.span(f"Move B: {move_b if move_b else '(not selected)'}"),
+                    ),
+                ),
+                ui.hr(style="margin: 10px 0;"),
+                # Top move buttons
+                ui.div(
+                    ui.p(ui.strong("Popular moves (click to select):"), style="margin-bottom: 10px;"),
+                    ui.div(
+                        *move_buttons,
+                        style="display: flex; flex-wrap: wrap;"
+                    ),
+                ),
+                # Dropdown for other moves
+                ui.div(
+                    ui.input_select(
+                        "move_dropdown",
+                        "Other moves:",
+                        choices=dropdown_choices,
+                        width="300px"
+                    ) if other_moves else ui.div(),
+                    style="margin-top: 15px;"
+                ),
+            )
         )
     
-    @output
-    @render.ui
-    def move_b_selector():
-        board = main_board()
-        position_st = position_stats()
+    # Handle move button clicks
+    @reactive.Effect
+    @reactive.event(input.move_clicked)
+    def _on_move_clicked():
+        move_san = input.move_clicked()
+        if not move_san or move_san == "---":
+            return
         
-        # Only show selector if position has been analyzed
-        if not position_st:
-            return ui.div(
-                {"class": "loading"},
-                "Analyze position first to see available moves"
-            )
+        move_a = selected_move_a()
+        move_b = selected_move_b()
         
-        if board.is_game_over():
-            return ui.div("Game over - no legal moves")
+        # If clicking already selected move, deselect it
+        if move_san == move_a:
+            selected_move_a.set(None)
+            return
+        elif move_san == move_b:
+            selected_move_b.set(None)
+            return
         
-        # Get legal moves
-        choices = {}
-        for move in board.legal_moves:
-            san = board.san(move)
-            choices[san] = san
+        # If move A is empty, assign to A
+        if move_a is None:
+            selected_move_a.set(move_san)
+        # If move B is empty, assign to B
+        elif move_b is None:
+            selected_move_b.set(move_san)
+        # If both are filled, replace A
+        else:
+            selected_move_a.set(move_san)
+    
+    # Handle dropdown selection
+    @reactive.Effect
+    @reactive.event(input.move_dropdown)
+    def _on_dropdown_selected():
+        move_san = input.move_dropdown()
+        if not move_san or move_san == "---":
+            return
         
-        return ui.input_select(
-            "selected_move_b",
-            "Select move:",
-            choices=choices,
-            selected=None
-        )
+        move_a = selected_move_a()
+        move_b = selected_move_b()
+        
+        # If clicking already selected move, deselect it
+        if move_san == move_a:
+            selected_move_a.set(None)
+            return
+        elif move_san == move_b:
+            selected_move_b.set(None)
+            return
+        
+        # If move A is empty, assign to A
+        if move_a is None:
+            selected_move_a.set(move_san)
+        # If move B is empty, assign to B
+        elif move_b is None:
+            selected_move_b.set(move_san)
+        # If both are filled, replace A
+        else:
+            selected_move_a.set(move_san)
+        
+        # Reset dropdown
+        ui.update_select("move_dropdown", selected="---")
     
     # When move A is selected, fetch its data lazily
     @reactive.Effect
-    @reactive.event(input.selected_move_a)
+    @reactive.event(selected_move_a)
     async def _on_move_a_selected():
-        move_san = input.selected_move_a()
+        move_san = selected_move_a()
         if not move_san:
+            move_a_stats.set({})
+            move_a_eval.set({})
             return
         
         board = main_board()
@@ -577,10 +774,12 @@ def server(input, output, session):
     
     # When move B is selected, fetch its data lazily
     @reactive.Effect
-    @reactive.event(input.selected_move_b)
+    @reactive.event(selected_move_b)
     async def _on_move_b_selected():
-        move_san = input.selected_move_b()
+        move_san = selected_move_b()
         if not move_san:
+            move_b_stats.set({})
+            move_b_eval.set({})
             return
         
         board = main_board()
@@ -608,13 +807,16 @@ def server(input, output, session):
     def move_a_details():
         stats = move_a_stats()
         evaluation = move_a_eval()
-        move_san = input.selected_move_a() if hasattr(input, 'selected_move_a') else None
+        move_san = selected_move_a()
         
         if not move_san:
-            return ui.div({"class": "loading"}, "Select a move to see details")
+            return ui.div(
+                {"class": "loading"},
+                ui.p("Click a move from the selection panel above", style="text-align: center; padding: 20px; color: #6c757d;")
+            )
         
         # Get move B data for comparison
-        move_b_san = input.selected_move_b() if hasattr(input, 'selected_move_b') else None
+        move_b_san = selected_move_b()
         stats_b = move_b_stats()
         eval_b = move_b_eval()
         
@@ -696,13 +898,16 @@ def server(input, output, session):
     def move_b_details():
         stats = move_b_stats()
         evaluation = move_b_eval()
-        move_san = input.selected_move_b() if hasattr(input, 'selected_move_b') else None
+        move_san = selected_move_b()
         
         if not move_san:
-            return ui.div({"class": "loading"}, "Select a move to see details")
+            return ui.div(
+                {"class": "loading"},
+                ui.p("Click a move from the selection panel above", style="text-align: center; padding: 20px; color: #6c757d;")
+            )
         
         # Get move A data for comparison
-        move_a_san = input.selected_move_a() if hasattr(input, 'selected_move_a') else None
+        move_a_san = selected_move_a()
         stats_a = move_a_stats()
         eval_a = move_a_eval()
         
