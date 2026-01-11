@@ -392,6 +392,12 @@ chessboard_js = r"""
 <script>
 console.log('Chessboard scripts loaded');
 
+// IMPORTANT: don't store the Chessboard instance on window.mainBoard.
+// Browsers may auto-create window.mainBoard from the element id="mainBoard",
+// which is a plain DOM element and does not have .position().
+window.mainBoardWidget = null;
+window.pendingMainBoardFen = null;
+
 // Initialize Stockfish engine using inline worker to avoid CORS issues
 let stockfishWorker = null;
 let stockfishReady = false;
@@ -501,7 +507,7 @@ window.addEventListener('load', function() {
         
         try {
             if (document.getElementById('mainBoard')) {
-                window.mainBoard = Chessboard('mainBoard', {
+                window.mainBoardWidget = Chessboard('mainBoard', {
                     position: 'start',
                     draggable: true,
                     pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
@@ -514,6 +520,17 @@ window.addEventListener('load', function() {
                     }
                 });
                 console.log('✓ Main board initialized successfully');
+
+                // Apply any queued update that arrived before init.
+                if (window.pendingMainBoardFen) {
+                    try {
+                        window.mainBoardWidget.position(window.pendingMainBoardFen);
+                        console.log('✓ Applied queued board update');
+                    } catch (e) {
+                        console.error('✗ Failed applying queued board update:', e);
+                    }
+                    window.pendingMainBoardFen = null;
+                }
             } else {
                 console.error('✗ mainBoard element not found');
             }
@@ -531,13 +548,16 @@ function registerShinyHandlers() {
         
         Shiny.addCustomMessageHandler('update_board', function(message) {
             console.log('Update board message received:', message);
-            if (window.mainBoard) {
+            if (window.mainBoardWidget && typeof window.mainBoardWidget.position === 'function') {
                 try {
-                    window.mainBoard.position(message.fen);
+                    window.mainBoardWidget.position(message.fen);
                     console.log('Board position updated');
                 } catch(e) {
                     console.error('Error updating board:', e);
                 }
+            } else {
+                // Board not ready yet; queue the latest fen and apply after init.
+                window.pendingMainBoardFen = message.fen;
             }
         });
         
@@ -618,79 +638,117 @@ app_ui = ui.page_fluid(
         ),
     ),
     
-    # Three-column layout
-    ui.layout_columns(
+    # Two-column layout (Bootstrap grid; avoid bslib JS)
+    ui.row(
         # Column 1: Current Position
-        ui.card(
-            ui.card_header(ui.h4("Current Position", style="margin: 0; font-size: 1.1rem;")),
-            
-            # Chess board
-            ui.div(
-                {"class": "board-container"},
-                ui.HTML('<div id="mainBoard" style="width: 100%; max-width: 100%; height: auto;"></div>'),
-            ),
-            
-            # Move input below board
-            ui.input_text("moves", "Moves:", 
-                         placeholder="e.g., e4 e5 Nf3 Nc6",
-                         width="100%"),
-            
-            # Action buttons
-            ui.div(
-                ui.input_action_button("analyze_position", "Analyze", class_="btn-primary", style="width: 48%; margin-right: 2%;"),
-                ui.input_action_button("reset_board", "Reset", class_="btn-secondary", style="width: 48%;"),
-                style="margin-top: 10px; margin-bottom: 10px;"
-            ),
-            
-            # Evaluation preference toggle
-            ui.div(
-                ui.input_radio_buttons(
-                    "eval_mode",
-                    "Evaluation:",
-                    choices={
-                        "local": "🖥️ Local (Stockfish.js)",
-                        "cloud": "☁️ Cloud (Lichess API)",
-                        "auto": "🔄 Auto (Local → Cloud)"
-                    },
-                    selected="auto",
-                    inline=True
+        ui.column(
+            4,
+            ui.tags.div(
+                {"class": "card"},
+                ui.tags.div(
+                    {"class": "card-header"},
+                    ui.h4("Current Position", style="margin: 0; font-size: 1.1rem;"),
                 ),
-                style="margin-bottom: 15px; font-size: 0.85em;"
+                ui.tags.div(
+                    {"class": "card-body"},
+                    # Chess board
+                    ui.div(
+                        {"class": "board-container"},
+                        ui.HTML('<div id="mainBoard" style="width: 100%; max-width: 100%; height: auto;"></div>'),
+                    ),
+                    # Move input below board
+                    ui.input_text(
+                        "moves",
+                        "Moves:",
+                        placeholder="e.g., e4 e5 Nf3 Nc6",
+                        width="100%",
+                    ),
+                    # Action buttons
+                    ui.div(
+                        ui.input_action_button(
+                            "analyze_position",
+                            "Analyze",
+                            class_="btn-primary",
+                            style="width: 48%; margin-right: 2%;",
+                        ),
+                        ui.input_action_button(
+                            "reset_board",
+                            "Reset",
+                            class_="btn-secondary",
+                            style="width: 48%;",
+                        ),
+                        style="margin-top: 10px; margin-bottom: 10px;",
+                    ),
+                    # Evaluation preference toggle
+                    ui.div(
+                        ui.input_radio_buttons(
+                            "eval_mode",
+                            "Evaluation:",
+                            choices={
+                                "local": "🖥️ Local (Stockfish.js)",
+                                "cloud": "☁️ Cloud (Lichess API)",
+                                "auto": "🔄 Auto (Local → Cloud)",
+                            },
+                            selected="auto",
+                            inline=True,
+                        ),
+                        style="margin-bottom: 15px; font-size: 0.85em;",
+                    ),
+                    # Position summary
+                    ui.output_ui("position_summary"),
+                ),
             ),
-            
-            # Position summary
-            ui.output_ui("position_summary"),
         ),
         
-        # Column 2-3: Candidate Move Comparison
-        ui.div(
-            # Combined selection panel
-            ui.output_ui("move_selector_panel"),
-            
-            # Two comparison columns
-            ui.layout_columns(
-                # Column 2: Candidate Move A
-                ui.card(
-                    ui.card_header(
-                        ui.h4("Candidate Move A", style="margin: 0; font-size: 1.1rem; color: hsl(209, 79%, 56%);")
+        # Column 2: Candidate Move Comparison
+        ui.column(
+            8,
+            ui.div(
+                # Combined selection panel
+                ui.output_ui("move_selector_panel"),
+                
+                # Two comparison columns
+                ui.row(
+                    ui.column(
+                        6,
+                        ui.tags.div(
+                            {"class": "card"},
+                            ui.tags.div(
+                                {"class": "card-header"},
+                                ui.h4(
+                                    "Candidate Move A",
+                                    style="margin: 0; font-size: 1.1rem; color: hsl(209, 79%, 56%);",
+                                ),
+                            ),
+                            ui.tags.div(
+                                {"class": "card-body"},
+                                ui.output_ui("move_a_details"),
+                            ),
+                        ),
                     ),
-                    ui.output_ui("move_a_details"),
+                    ui.column(
+                        6,
+                        ui.tags.div(
+                            {"class": "card"},
+                            ui.tags.div(
+                                {"class": "card-header"},
+                                ui.h4(
+                                    "Candidate Move B",
+                                    style="margin: 0; font-size: 1.1rem; color: hsl(88, 62%, 37%);",
+                                ),
+                            ),
+                            ui.tags.div(
+                                {"class": "card-body"},
+                                ui.output_ui("move_b_details"),
+                            ),
+                        ),
+                    ),
                 ),
                 
-                # Column 3: Candidate Move B
-                ui.card(
-                    ui.card_header(
-                        ui.h4("Candidate Move B", style="margin: 0; font-size: 1.1rem; color: hsl(88, 62%, 37%);")
-                    ),
-                    ui.output_ui("move_b_details"),
-                ),
-                col_widths=[6, 6],
+                # Shared comparison panel
+                ui.output_ui("comparison_panel"),
             ),
-            
-            # Shared comparison panel
-            ui.output_ui("comparison_panel"),
         ),
-        col_widths=[4, 8],
     ),
 )
 
@@ -715,10 +773,6 @@ def server(input, output, session):
     
     # Track if board is initialized
     board_initialized = reactive.Value(False)
-    
-    # Track Stockfish evaluation requests
-    stockfish_request_id = reactive.Value(0)
-    stockfish_results = {}
     
     @reactive.Effect
     async def _init_board():
@@ -777,10 +831,17 @@ def server(input, output, session):
         move_b_stats.set({})
         move_b_eval.set({})
     
-    # Reactive values for stockfish results
-    stockfish_pending = {}  # Dict[int, asyncio.Event]
-    stockfish_results = {}  # Dict[int, dict]
-    stockfish_request_id = reactive.value(0)
+    # Reactive values for Stockfish results (responses come back via input.stockfish_response)
+    stockfish_pending: Dict[int, asyncio.Event] = {}
+    stockfish_results: Dict[int, dict] = {}
+    stockfish_request_id = reactive.Value(0)
+
+    # Generation counters to prevent stale async results overwriting newer ones
+    eval_generation = {
+        "position": 0,
+        "move_a": 0,
+        "move_b": 0,
+    }
     
     # Watch for stockfish results from JavaScript using a single input
     @reactive.Effect
@@ -788,12 +849,23 @@ def server(input, output, session):
     def _on_stockfish_response():
         try:
             response = input.stockfish_response()
-            if not response:
+            if response is None or response == "":
                 return
                 
             import json
-            data = json.loads(response)
+            if isinstance(response, str):
+                data = json.loads(response)
+            else:
+                data = response
+
+            if not isinstance(data, dict):
+                return
+
             req_id = data.get('request_id')
+            try:
+                req_id = int(req_id) if req_id is not None else None
+            except Exception:
+                req_id = None
             
             if req_id and req_id in stockfish_pending:
                 if 'error' in data:
@@ -867,14 +939,13 @@ def server(input, output, session):
                 {"fen": new_board.fen()}
             )
             
-            # Fetch stats and evaluation for current position only
+            # Fetch stats for current position
             fen = new_board.fen()
-            stats_task = fetch_lichess_stats(fen)
-            eval_task = get_evaluation(fen)
-            
-            stats, evaluation = await asyncio.gather(stats_task, eval_task)
+            stats = await fetch_lichess_stats(fen)
             position_stats.set(stats)
-            position_eval.set(evaluation)
+
+            # Start evaluation in background to avoid deadlocks on input callbacks
+            start_evaluation_for_target(fen, position_eval, target_key="position")
             
             # Clear previous move selections
             selected_move_a.set(None)
@@ -955,91 +1026,106 @@ def server(input, output, session):
         except Exception as e:
             return {"error": str(e)}
     
-    async def evaluate_with_stockfish(fen: str, depth: int = 9) -> Dict[str, Any]:
-        """Evaluate position using local Stockfish.js."""
+    async def _request_stockfish_eval(fen: str, depth: int = 9) -> int:
+        """Send a Stockfish evaluation request to the browser and return the request id."""
+        request_id = stockfish_request_id() + 1
+        stockfish_request_id.set(request_id)
+
+        print(f"📤 Sending Stockfish request {request_id} for position: {fen[:50]}...")
+
+        event = asyncio.Event()
+        stockfish_pending[request_id] = event
+
+        await session.send_custom_message(
+            "evaluate_stockfish",
+            {"fen": fen, "depth": depth, "request_id": request_id},
+        )
+        return request_id
+
+    async def _await_stockfish_eval(request_id: int, depth: int = 9, timeout_s: float = 30.0) -> Dict[str, Any]:
+        """Wait for a Stockfish response and convert to Lichess cloud-eval-like format."""
         try:
-            request_id = stockfish_request_id() + 1
-            stockfish_request_id.set(request_id)
-            
-            print(f"📤 Sending Stockfish request {request_id} for position: {fen[:50]}...")
-            
-            # Create event for this request
-            event = asyncio.Event()
-            stockfish_pending[request_id] = event
-            
-            # Send request to JavaScript
-            await session.send_custom_message(
-                "evaluate_stockfish",
-                {"fen": fen, "depth": depth, "request_id": request_id}
-            )
-            
-            print(f"✓ Message sent, waiting for result...")
-            
-            # Wait for result with timeout
-            try:
-                await asyncio.wait_for(event.wait(), timeout=30.0)
-                result = stockfish_results.pop(request_id, None)
-                stockfish_pending.pop(request_id, None)
-                
-                if result:
-                    if "error" in result:
-                        return {"error": f"Stockfish: {result['error']}"}
-                    
-                    print(f"✓ Stockfish result: {result}")
-                    
-                    # Convert to Lichess format
-                    if result.get('cp') is not None:
-                        return {
-                            "pvs": [{"cp": result['cp']}],
-                            "depth": depth,
-                            "source": "stockfish.js"
-                        }
-                    elif result.get('mate') is not None:
-                        mate_in = result['mate']
-                        cp = 10000 if mate_in > 0 else -10000
-                        return {
-                            "pvs": [{"cp": cp, "mate": mate_in}],
-                            "depth": depth,
-                            "source": "stockfish.js"
-                        }
-                
+            event = stockfish_pending.get(request_id)
+            if not event:
+                return {"error": "Stockfish request missing"}
+
+            print("✓ Message sent, waiting for result...")
+
+            await asyncio.wait_for(event.wait(), timeout=timeout_s)
+            result = stockfish_results.pop(request_id, None)
+            stockfish_pending.pop(request_id, None)
+
+            if not result:
                 return {"error": "Stockfish returned no result"}
-                
-            except asyncio.TimeoutError:
-                stockfish_pending.pop(request_id, None)
-                stockfish_results.pop(request_id, None)
-                return {"error": "Stockfish evaluation timeout"}
-            
-        except Exception as e:
-            return {"error": f"Stockfish setup error: {str(e)}"}
-    
-    async def get_evaluation(fen: str) -> Dict[str, Any]:
-        """Get evaluation based on user preference (local, cloud, or auto)."""
-        mode = input.eval_mode() if hasattr(input, 'eval_mode') else "auto"
-        
-        if mode == "cloud":
-            # Cloud only
-            return await fetch_cloud_eval(fen)
-        
-        elif mode == "local":
-            # Local only
-            result = await evaluate_with_stockfish(fen)
             if "error" in result:
-                # If local fails, still return error (don't fallback)
-                return result
-            return result
-        
-        else:  # auto mode
-            # Try local first, fallback to cloud
-            print(f"Attempting Stockfish evaluation for position...")
-            result = await evaluate_with_stockfish(fen)
-            if "error" not in result:
-                print(f"Stockfish evaluation successful")
-                return result
-            
-            # Fallback to cloud
-            print(f"Stockfish failed ({result.get('error')}), falling back to cloud API")
+                return {"error": f"Stockfish: {result['error']}"}
+
+            print(f"✓ Stockfish result: {result}")
+
+            if result.get("cp") is not None:
+                return {
+                    "pvs": [{"cp": result["cp"]}],
+                    "depth": depth,
+                    "source": "stockfish.js",
+                }
+            if result.get("mate") is not None:
+                mate_in = result["mate"]
+                cp = 10000 if mate_in > 0 else -10000
+                return {
+                    "pvs": [{"cp": cp, "mate": mate_in}],
+                    "depth": depth,
+                    "source": "stockfish.js",
+                }
+
+            return {"error": "Stockfish result missing cp/mate"}
+
+        except asyncio.TimeoutError:
+            stockfish_pending.pop(request_id, None)
+            stockfish_results.pop(request_id, None)
+            return {"error": "Stockfish evaluation timeout"}
+        except Exception as e:
+            stockfish_pending.pop(request_id, None)
+            stockfish_results.pop(request_id, None)
+            return {"error": f"Stockfish wait error: {str(e)}"}
+
+    async def _compute_evaluation(fen: str, depth: int = 9, mode: str = "auto") -> Dict[str, Any]:
+        """Compute evaluation based on mode; safe to run in a background task."""
+        if mode == "cloud":
             return await fetch_cloud_eval(fen)
+
+        if mode == "local":
+            req_id = await _request_stockfish_eval(fen, depth=depth)
+            return await _await_stockfish_eval(req_id, depth=depth)
+
+        # auto
+        print("Attempting Stockfish evaluation for position...")
+        req_id = await _request_stockfish_eval(fen, depth=depth)
+        result = await _await_stockfish_eval(req_id, depth=depth)
+        if "error" not in result:
+            print("Stockfish evaluation successful")
+            return result
+        print(f"Stockfish failed ({result.get('error')}), falling back to cloud API")
+        cloud = await fetch_cloud_eval(fen)
+        if "error" not in cloud:
+            cloud["source"] = "cloud"
+        return cloud
+
+    def start_evaluation_for_target(fen: str, target_value: reactive.Value, target_key: str, depth: int = 9) -> None:
+        """Kick off evaluation in the background and update target_value when done."""
+        eval_generation[target_key] += 1
+        generation = eval_generation[target_key]
+        mode = input.eval_mode() if hasattr(input, "eval_mode") else "auto"
+
+        # Mark as pending immediately for the UI
+        target_value.set({"pending": True, "mode": mode})
+
+        async def _runner() -> None:
+            result = await _compute_evaluation(fen, depth=depth, mode=mode)
+            # Only apply if still the latest request for this target
+            if eval_generation.get(target_key) == generation:
+                target_value.set(result)
+
+        asyncio.create_task(_runner())
     
     @output
     @render.ui
@@ -1067,6 +1153,15 @@ def server(input, output, session):
         # Evaluation
         eval_text = "Not analyzed"
         eval_source = ""
+        if evaluation and evaluation.get("pending"):
+            eval_text = "⏳ Evaluating…"
+            mode = evaluation.get("mode")
+            if mode == "cloud":
+                eval_source = " <span style='color: hsl(209, 79%, 56%); font-size: 0.8em;'>(Cloud)</span>"
+            elif mode == "local":
+                eval_source = " <span style='color: hsl(88, 62%, 50%); font-size: 0.8em;'>(Local)</span>"
+            else:
+                eval_source = " <span style='color: hsl(0, 0%, 58%); font-size: 0.8em;'>(Auto)</span>"
         if evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
             cp = evaluation['pvs'][0].get('cp')
             if cp is not None:
@@ -1124,18 +1219,32 @@ def server(input, output, session):
         
         # Only show selector if position has been analyzed
         if not position_st:
-            return ui.card(
-                ui.card_header(ui.h4("📋 Select Candidate Moves", style="margin: 0;")),
-                ui.div(
-                    {"class": "loading"},
-                    "Analyze position first to see available moves"
-                )
+            return ui.tags.div(
+                {"class": "card"},
+                ui.tags.div(
+                    {"class": "card-header"},
+                    ui.h4("📋 Select Candidate Moves", style="margin: 0;"),
+                ),
+                ui.tags.div(
+                    {"class": "card-body"},
+                    ui.div(
+                        {"class": "loading"},
+                        "Analyze position first to see available moves",
+                    ),
+                ),
             )
         
         if board.is_game_over():
-            return ui.card(
-                ui.card_header(ui.h4("📋 Select Candidate Moves", style="margin: 0;")),
-                ui.div("Game over - no legal moves")
+            return ui.tags.div(
+                {"class": "card"},
+                ui.tags.div(
+                    {"class": "card-header"},
+                    ui.h4("📋 Select Candidate Moves", style="margin: 0;"),
+                ),
+                ui.tags.div(
+                    {"class": "card-body"},
+                    ui.div("Game over - no legal moves"),
+                ),
             )
         
         # Get legal moves sorted by popularity from stats
@@ -1189,44 +1298,50 @@ def server(input, output, session):
         for move_san in other_moves:
             dropdown_choices[move_san] = move_san
         
-        return ui.card(
-            ui.card_header(ui.h4("📋 Select Candidate Moves", style="margin: 0; font-weight: 700;")),
-            ui.div(
-                {"class": "move-selector-panel"},
-                # Legend
+        return ui.tags.div(
+            {"class": "card"},
+            ui.tags.div(
+                {"class": "card-header"},
+                ui.h4("📋 Select Candidate Moves", style="margin: 0; font-weight: 700;"),
+            ),
+            ui.tags.div(
+                {"class": "card-body"},
                 ui.div(
-                    {"class": "selection-legend"},
+                    {"class": "move-selector-panel"},
+                    # Legend
                     ui.div(
-                        {"class": "legend-item"},
-                        ui.div({"class": "legend-color color-a"}),
-                        ui.span(f"Move A: {move_a if move_a else '(not selected)'}"),
+                        {"class": "selection-legend"},
+                        ui.div(
+                            {"class": "legend-item"},
+                            ui.div({"class": "legend-color color-a"}),
+                            ui.span(f"Move A: {move_a if move_a else '(not selected)'}"),
+                        ),
+                        ui.div(
+                            {"class": "legend-item"},
+                            ui.div({"class": "legend-color color-b"}),
+                            ui.span(f"Move B: {move_b if move_b else '(not selected)'}"),
+                        ),
                     ),
+                    ui.hr(style="margin: 10px 0;"),
+                    # Top move buttons
                     ui.div(
-                        {"class": "legend-item"},
-                        ui.div({"class": "legend-color color-b"}),
-                        ui.span(f"Move B: {move_b if move_b else '(not selected)'}"),
+                        ui.p(ui.strong("Popular moves (click to select):"), style="margin-bottom: 10px;"),
+                        ui.div(*move_buttons, style="display: flex; flex-wrap: wrap;"),
+                    ),
+                    # Dropdown for other moves
+                    ui.div(
+                        ui.input_select(
+                            "move_dropdown",
+                            "Other moves:",
+                            choices=dropdown_choices,
+                            width="300px",
+                        )
+                        if other_moves
+                        else ui.div(),
+                        style="margin-top: 15px;",
                     ),
                 ),
-                ui.hr(style="margin: 10px 0;"),
-                # Top move buttons
-                ui.div(
-                    ui.p(ui.strong("Popular moves (click to select):"), style="margin-bottom: 10px;"),
-                    ui.div(
-                        *move_buttons,
-                        style="display: flex; flex-wrap: wrap;"
-                    ),
-                ),
-                # Dropdown for other moves
-                ui.div(
-                    ui.input_select(
-                        "move_dropdown",
-                        "Other moves:",
-                        choices=dropdown_choices,
-                        width="300px"
-                    ) if other_moves else ui.div(),
-                    style="margin-top: 15px;"
-                ),
-            )
+            ),
         )
     
     # Handle move button clicks
@@ -1309,12 +1424,10 @@ def server(input, output, session):
             test_board.push(move)
             fen = test_board.fen()
             
-            # Fetch evaluation and stats for this position
-            eval_task = get_evaluation(fen)
-            stats_task = fetch_lichess_stats(fen)
-            
-            evaluation, stats = await asyncio.gather(eval_task, stats_task)
-            move_a_eval.set(evaluation)
+            # Fetch stats, start evaluation in background
+            move_a_stats.set({})
+            start_evaluation_for_target(fen, move_a_eval, target_key="move_a")
+            stats = await fetch_lichess_stats(fen)
             move_a_stats.set(stats)
         except Exception as e:
             move_a_eval.set({"error": str(e)})
@@ -1339,12 +1452,10 @@ def server(input, output, session):
             test_board.push(move)
             fen = test_board.fen()
             
-            # Fetch evaluation and stats for this position
-            eval_task = get_evaluation(fen)
-            stats_task = fetch_lichess_stats(fen)
-            
-            evaluation, stats = await asyncio.gather(eval_task, stats_task)
-            move_b_eval.set(evaluation)
+            # Fetch stats, start evaluation in background
+            move_b_stats.set({})
+            start_evaluation_for_target(fen, move_b_eval, target_key="move_b")
+            stats = await fetch_lichess_stats(fen)
             move_b_stats.set(stats)
         except Exception as e:
             move_b_eval.set({"error": str(e)})
@@ -1372,7 +1483,9 @@ def server(input, output, session):
         
         # Evaluation for move A
         eval_html = "<p style='color: hsl(0, 0%, 73%);'><em>No evaluation available</em></p>"
-        if evaluation and 'error' in evaluation:
+        if evaluation and evaluation.get('pending'):
+            eval_html = "<p style='color: hsl(0, 0%, 73%);'><em>⏳ Evaluating…</em></p>"
+        elif evaluation and 'error' in evaluation:
             eval_html = f"<p style='color: hsl(0, 60%, 60%);'><small>Eval error: {evaluation['error']}</small></p>"
         elif evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
             cp_a = evaluation['pvs'][0].get('cp')
@@ -1431,7 +1544,9 @@ def server(input, output, session):
         
         # Evaluation for move B
         eval_html = "<p style='color: hsl(0, 0%, 73%);'><em>No evaluation available</em></p>"
-        if evaluation and 'error' in evaluation:
+        if evaluation and evaluation.get('pending'):
+            eval_html = "<p style='color: hsl(0, 0%, 73%);'><em>⏳ Evaluating…</em></p>"
+        elif evaluation and 'error' in evaluation:
             eval_html = f"<p style='color: hsl(0, 60%, 60%);'><small>Eval error: {evaluation['error']}</small></p>"
         elif evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
             cp_b = evaluation['pvs'][0].get('cp')
@@ -1484,14 +1599,28 @@ def server(input, output, session):
         stats_b = move_b_stats()
         eval_b = move_b_eval()
         
-        # Check if data is loaded
-        if not stats_a or not stats_b or not eval_a or not eval_b:
-            return ui.card(
-                ui.card_header(ui.h4("📊 Head-to-Head Comparison", style="margin: 0;")),
-                ui.div(
-                    {"class": "loading"},
-                    ui.p("⏳ Loading comparison data...", style="text-align: center; padding: 20px;")
-                )
+        # Check if data is loaded (treat pending eval as loading)
+        if (
+            not stats_a
+            or not stats_b
+            or not eval_a
+            or not eval_b
+            or (isinstance(eval_a, dict) and eval_a.get("pending"))
+            or (isinstance(eval_b, dict) and eval_b.get("pending"))
+        ):
+            return ui.tags.div(
+                {"class": "card"},
+                ui.tags.div(
+                    {"class": "card-header"},
+                    ui.h4("📊 Head-to-Head Comparison", style="margin: 0;"),
+                ),
+                ui.tags.div(
+                    {"class": "card-body"},
+                    ui.div(
+                        {"class": "loading"},
+                        ui.p("⏳ Loading comparison data...", style="text-align: center; padding: 20px;"),
+                    ),
+                ),
             )
         
         # Extract evaluation data
@@ -1593,53 +1722,62 @@ def server(input, output, session):
         else:
             games_a_class = games_b_class = "tie"
         
-        return ui.card(
-            ui.card_header(ui.h4("📊 Head-to-Head Comparison", style="margin: 0;")),
-            ui.HTML(f"""
-                <div class="comparison-panel">
-                    <table class="comparison-table">
-                        <thead>
-                            <tr>
-                                <th class="metric-name">Metric</th>
-                                <th style="color: hsl(209, 79%, 56%); font-weight: 700;">{move_a_san}</th>
-                                <th style="color: hsl(88, 62%, 37%); font-weight: 700;">{move_b_san}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td class="metric-name">Engine Evaluation</td>
-                                <td class="{eval_a_class}">{eval_a_text}</td>
-                                <td class="{eval_b_class}">{eval_b_text}</td>
-                            </tr>
-                            <tr>
-                                <td class="metric-name">Total Games</td>
-                                <td class="{games_a_class}">{total_a:,}</td>
-                                <td class="{games_b_class}">{total_b:,}</td>
-                            </tr>
-                            <tr>
-                                <td class="metric-name">White Win %</td>
-                                <td class="{white_a_class}">{white_pct_a}%</td>
-                                <td class="{white_b_class}">{white_pct_b}%</td>
-                            </tr>
-                            <tr>
-                                <td class="metric-name">Draw %</td>
-                                <td class="{draw_a_class}">{draw_pct_a}%</td>
-                                <td class="{draw_b_class}">{draw_pct_b}%</td>
-                            </tr>
-                            <tr>
-                                <td class="metric-name">Black Win %</td>
-                                <td class="{black_a_class}">{black_pct_a}%</td>
-                                <td class="{black_b_class}">{black_pct_b}%</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                    <p style="margin-top: 15px; font-size: 0.85em; color: hsl(0, 0%, 58%); text-align: center;">
-                        <span style="background-color: rgba(88, 153, 0, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(88, 62%, 50%);">Green</span> = Better
-                        <span style="background-color: rgba(220, 50, 47, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(0, 60%, 60%);">Red</span> = Worse
-                        <span style="background-color: rgba(181, 137, 0, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(37, 74%, 53%);">Yellow</span> = Tied
-                    </p>
-                </div>
-            """)
+        return ui.tags.div(
+            {"class": "card"},
+            ui.tags.div(
+                {"class": "card-header"},
+                ui.h4("📊 Head-to-Head Comparison", style="margin: 0;"),
+            ),
+            ui.tags.div(
+                {"class": "card-body"},
+                ui.HTML(
+                    f"""
+                    <div class="comparison-panel">
+                        <table class="comparison-table">
+                            <thead>
+                                <tr>
+                                    <th class="metric-name">Metric</th>
+                                    <th style="color: hsl(209, 79%, 56%); font-weight: 700;">{move_a_san}</th>
+                                    <th style="color: hsl(88, 62%, 37%); font-weight: 700;">{move_b_san}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="metric-name">Engine Evaluation</td>
+                                    <td class="{eval_a_class}">{eval_a_text}</td>
+                                    <td class="{eval_b_class}">{eval_b_text}</td>
+                                </tr>
+                                <tr>
+                                    <td class="metric-name">Total Games</td>
+                                    <td class="{games_a_class}">{total_a:,}</td>
+                                    <td class="{games_b_class}">{total_b:,}</td>
+                                </tr>
+                                <tr>
+                                    <td class="metric-name">White Win %</td>
+                                    <td class="{white_a_class}">{white_pct_a}%</td>
+                                    <td class="{white_b_class}">{white_pct_b}%</td>
+                                </tr>
+                                <tr>
+                                    <td class="metric-name">Draw %</td>
+                                    <td class="{draw_a_class}">{draw_pct_a}%</td>
+                                    <td class="{draw_b_class}">{draw_pct_b}%</td>
+                                </tr>
+                                <tr>
+                                    <td class="metric-name">Black Win %</td>
+                                    <td class="{black_a_class}">{black_pct_a}%</td>
+                                    <td class="{black_b_class}">{black_pct_b}%</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <p style="margin-top: 15px; font-size: 0.85em; color: hsl(0, 0%, 58%); text-align: center;">
+                            <span style="background-color: rgba(88, 153, 0, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(88, 62%, 50%);">Green</span> = Better
+                            <span style="background-color: rgba(220, 50, 47, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(0, 60%, 60%);">Red</span> = Worse
+                            <span style="background-color: rgba(181, 137, 0, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(37, 74%, 53%);">Yellow</span> = Tied
+                        </p>
+                    </div>
+                    """
+                ),
+            ),
         )
 
 
