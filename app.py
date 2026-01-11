@@ -366,7 +366,7 @@ def server(input, output, session):
                 # Use js.fetch in Shinylive/Pyodide
                 query_parts = []
                 for key, value in params.items():
-                    encoded_value = await js.encodeURIComponent(value)
+                    encoded_value = js.encodeURIComponent(value)
                     query_parts.append(f"{key}={encoded_value}")
                 query = "&".join(query_parts)
                 
@@ -395,7 +395,7 @@ def server(input, output, session):
             
             if IN_BROWSER:
                 # Use js.fetch in Shinylive/Pyodide
-                encoded_fen = await js.encodeURIComponent(fen)
+                encoded_fen = js.encodeURIComponent(fen)
                 url = f"{base_url}?fen={encoded_fen}&multiPv=1"
                 
                 response = await js.fetch(url)
