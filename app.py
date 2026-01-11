@@ -397,6 +397,7 @@ let stockfishWorker = null;
 let stockfishReady = false;
 let evaluationQueue = {};
 let evalId = 0;
+let currentEvalId = null;
 
 try {
     // Create Stockfish worker from inline code to avoid CORS issues
@@ -408,8 +409,6 @@ try {
     const workerUrl = URL.createObjectURL(blob);
     stockfishWorker = new Worker(workerUrl);
     console.log('✓ Stockfish worker created from blob');
-    
-    let currentEvalId = null;
     
     stockfishWorker.onmessage = function(event) {
         const line = event.data;
@@ -464,7 +463,7 @@ try {
 }
 
 // Evaluate position with Stockfish
-window.evaluateWithStockfish = function(fen, depth = 18) {
+window.evaluateWithStockfish = function(fen, depth = 9) {
     return new Promise((resolve, reject) => {
         if (!stockfishWorker || !stockfishReady) {
             reject(new Error('Stockfish not ready'));
@@ -475,14 +474,14 @@ window.evaluateWithStockfish = function(fen, depth = 18) {
         evaluationQueue[id] = {resolve, reject, lastResult: null};
         currentEvalId = id;
         
-        // Set a timeout
+        // Set a timeout - 30 seconds to allow for depth 18 analysis
         setTimeout(() => {
             if (evaluationQueue[id]) {
                 delete evaluationQueue[id];
                 if (currentEvalId === id) currentEvalId = null;
                 reject(new Error('Evaluation timeout'));
             }
-        }, 10000); // 10 second timeout
+        }, 30000); // 30 second timeout
         
         stockfishWorker.postMessage('position fen ' + fen);
         stockfishWorker.postMessage('go depth ' + depth);
@@ -549,17 +548,26 @@ function registerShinyHandlers() {
             console.log('   Depth:', message.depth);
             console.log('   Request ID:', message.request_id);
             
-            window.evaluateWithStockfish(message.fen, message.depth || 18)
+            window.evaluateWithStockfish(message.fen, message.depth || 9)
                 .then(result => {
                     console.log('✓ Stockfish evaluation complete:', result);
-                    console.log('📤 Sending to Shiny as stockfish_result_' + message.request_id);
-                    Shiny.setInputValue('stockfish_result_' + message.request_id, JSON.stringify(result), {priority: 'event'});
+                    console.log('📤 Sending to Shiny as stockfish_response');
+                    const response = {
+                        request_id: message.request_id,
+                        cp: result.cp,
+                        mate: result.mate
+                    };
+                    Shiny.setInputValue('stockfish_response', JSON.stringify(response), {priority: 'event'});
                     console.log('✓ Result sent to Shiny');
                 })
                 .catch(error => {
                     console.error('✗ Stockfish evaluation failed:', error);
-                    console.log('📤 Sending error to Shiny as stockfish_error_' + message.request_id);
-                    Shiny.setInputValue('stockfish_error_' + message.request_id, error.message, {priority: 'event'});
+                    console.log('📤 Sending error to Shiny as stockfish_response');
+                    const response = {
+                        request_id: message.request_id,
+                        error: error.message
+                    };
+                    Shiny.setInputValue('stockfish_response', JSON.stringify(response), {priority: 'event'});
                     console.log('✓ Error sent to Shiny');
                 });
         });
@@ -769,6 +777,39 @@ def server(input, output, session):
         move_b_stats.set({})
         move_b_eval.set({})
     
+    # Reactive values for stockfish results
+    stockfish_pending = {}  # Dict[int, asyncio.Event]
+    stockfish_results = {}  # Dict[int, dict]
+    stockfish_request_id = reactive.value(0)
+    
+    # Watch for stockfish results from JavaScript using a single input
+    @reactive.Effect
+    @reactive.event(input.stockfish_response, ignore_none=False)
+    def _on_stockfish_response():
+        try:
+            response = input.stockfish_response()
+            if not response:
+                return
+                
+            import json
+            data = json.loads(response)
+            req_id = data.get('request_id')
+            
+            if req_id and req_id in stockfish_pending:
+                if 'error' in data:
+                    stockfish_results[req_id] = {"error": data['error']}
+                    print(f"✗ Received Stockfish error for request {req_id}: {data['error']}")
+                else:
+                    stockfish_results[req_id] = {
+                        'cp': data.get('cp'),
+                        'mate': data.get('mate')
+                    }
+                    print(f"✓ Received Stockfish result for request {req_id}: cp={data.get('cp')}, mate={data.get('mate')}")
+                
+                stockfish_pending[req_id].set()
+        except Exception as e:
+            print(f"Error processing stockfish response: {e}")
+    
     # Listen for board drag moves and apply if legal
     @reactive.Effect
     @reactive.event(input.board_move)
@@ -914,17 +955,17 @@ def server(input, output, session):
         except Exception as e:
             return {"error": str(e)}
     
-    async def evaluate_with_stockfish(fen: str, depth: int = 18) -> Dict[str, Any]:
+    async def evaluate_with_stockfish(fen: str, depth: int = 9) -> Dict[str, Any]:
         """Evaluate position using local Stockfish.js."""
         try:
             request_id = stockfish_request_id() + 1
             stockfish_request_id.set(request_id)
             
-            result_key = f"stockfish_result_{request_id}"
-            error_key = f"stockfish_error_{request_id}"
-            
             print(f"📤 Sending Stockfish request {request_id} for position: {fen[:50]}...")
-            print(f"   Will wait for: {result_key}")
+            
+            # Create event for this request
+            event = asyncio.Event()
+            stockfish_pending[request_id] = event
             
             # Send request to JavaScript
             await session.send_custom_message(
@@ -932,49 +973,42 @@ def server(input, output, session):
                 {"fen": fen, "depth": depth, "request_id": request_id}
             )
             
-            print(f"✓ Message sent to JavaScript")
+            print(f"✓ Message sent, waiting for result...")
             
-            # Wait for result (with timeout)
-            for i in range(150):  # 15 second timeout (150 * 0.1s)
-                await asyncio.sleep(0.1)
+            # Wait for result with timeout
+            try:
+                await asyncio.wait_for(event.wait(), timeout=30.0)
+                result = stockfish_results.pop(request_id, None)
+                stockfish_pending.pop(request_id, None)
                 
-                # Check for result
-                try:
-                    result_str = getattr(input, result_key, lambda: None)()
-                    if result_str:
-                        import json
-                        result = json.loads(result_str)
-                        print(f"✓ Stockfish result received: {result}")
-                        
-                        # Convert to Lichess format
-                        if result.get('cp') is not None:
-                            return {
-                                "pvs": [{"cp": result['cp']}],
-                                "depth": depth,
-                                "source": "stockfish.js"
-                            }
-                        elif result.get('mate') is not None:
-                            # Mate scores
-                            mate_in = result['mate']
-                            cp = 10000 if mate_in > 0 else -10000
-                            return {
-                                "pvs": [{"cp": cp, "mate": mate_in}],
-                                "depth": depth,
-                                "source": "stockfish.js"
-                            }
-                except:
-                    pass  # Result not ready yet
+                if result:
+                    if "error" in result:
+                        return {"error": f"Stockfish: {result['error']}"}
+                    
+                    print(f"✓ Stockfish result: {result}")
+                    
+                    # Convert to Lichess format
+                    if result.get('cp') is not None:
+                        return {
+                            "pvs": [{"cp": result['cp']}],
+                            "depth": depth,
+                            "source": "stockfish.js"
+                        }
+                    elif result.get('mate') is not None:
+                        mate_in = result['mate']
+                        cp = 10000 if mate_in > 0 else -10000
+                        return {
+                            "pvs": [{"cp": cp, "mate": mate_in}],
+                            "depth": depth,
+                            "source": "stockfish.js"
+                        }
                 
-                # Check for error
-                try:
-                    error = getattr(input, error_key, lambda: None)()
-                    if error:
-                        print(f"✗ Stockfish error received: {error}")
-                        return {"error": f"Stockfish: {error}"}
-                except:
-                    pass  # Error not present yet
-            
-            return {"error": "Stockfish evaluation timeout (not responding)"}
+                return {"error": "Stockfish returned no result"}
+                
+            except asyncio.TimeoutError:
+                stockfish_pending.pop(request_id, None)
+                stockfish_results.pop(request_id, None)
+                return {"error": "Stockfish evaluation timeout"}
             
         except Exception as e:
             return {"error": f"Stockfish setup error: {str(e)}"}
