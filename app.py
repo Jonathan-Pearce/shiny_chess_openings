@@ -385,12 +385,109 @@ small {
 """
 
 # Chess board JavaScript integration
-chessboard_js = """
+chessboard_js = r"""
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
 <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
 <script>
 console.log('Chessboard scripts loaded');
+
+// Initialize Stockfish engine using inline worker to avoid CORS issues
+let stockfishWorker = null;
+let stockfishReady = false;
+let evaluationQueue = {};
+let evalId = 0;
+
+try {
+    // Create Stockfish worker from inline code to avoid CORS issues
+    const stockfishCode = `
+        importScripts('https://unpkg.com/stockfish.js@10.0.2/stockfish.js');
+    `;
+    
+    const blob = new Blob([stockfishCode], { type: 'application/javascript' });
+    const workerUrl = URL.createObjectURL(blob);
+    stockfishWorker = new Worker(workerUrl);
+    console.log('✓ Stockfish worker created from blob');
+    
+    let currentEvalId = null;
+    
+    stockfishWorker.onmessage = function(event) {
+        const line = event.data;
+        console.log('Stockfish:', line);
+        
+        if (line === 'uciok') {
+            stockfishReady = true;
+            console.log('✓ Stockfish engine ready');
+        }
+        
+        // Parse evaluation results - use best score from last info line before bestmove
+        if (line.startsWith('info') && currentEvalId && (line.includes('score cp') || line.includes('score mate'))) {
+            let cp = null;
+            let mate = null;
+            
+            if (line.includes('score cp')) {
+                const cpMatch = line.match(/score cp (-?\d+)/);
+                if (cpMatch) cp = parseInt(cpMatch[1]);
+            } else if (line.includes('score mate')) {
+                const mateMatch = line.match(/score mate (-?\d+)/);
+                if (mateMatch) mate = parseInt(mateMatch[1]);
+            }
+            
+            // Store latest evaluation
+            if (cp !== null || mate !== null) {
+                if (evaluationQueue[currentEvalId]) {
+                    evaluationQueue[currentEvalId].lastResult = {cp, mate};
+                }
+            }
+        }
+        
+        // When bestmove is received, resolve with the last evaluation
+        if (line.startsWith('bestmove') && currentEvalId) {
+            if (evaluationQueue[currentEvalId] && evaluationQueue[currentEvalId].lastResult) {
+                const result = evaluationQueue[currentEvalId].lastResult;
+                console.log('Sending final result to Shiny:', result, 'for ID:', currentEvalId);
+                if (typeof Shiny !== 'undefined') {
+                    Shiny.setInputValue('stockfish_result_' + currentEvalId, JSON.stringify(result), {priority: 'event'});
+                }
+                evaluationQueue[currentEvalId].resolve(result);
+                delete evaluationQueue[currentEvalId];
+            }
+            currentEvalId = null;
+        }
+    };
+    
+    // Initialize engine
+    stockfishWorker.postMessage('uci');
+    
+} catch (e) {
+    console.error('✗ Failed to initialize Stockfish:', e);
+}
+
+// Evaluate position with Stockfish
+window.evaluateWithStockfish = function(fen, depth = 18) {
+    return new Promise((resolve, reject) => {
+        if (!stockfishWorker || !stockfishReady) {
+            reject(new Error('Stockfish not ready'));
+            return;
+        }
+        
+        const id = (++evalId).toString();
+        evaluationQueue[id] = {resolve, reject, lastResult: null};
+        currentEvalId = id;
+        
+        // Set a timeout
+        setTimeout(() => {
+            if (evaluationQueue[id]) {
+                delete evaluationQueue[id];
+                if (currentEvalId === id) currentEvalId = null;
+                reject(new Error('Evaluation timeout'));
+            }
+        }, 10000); // 10 second timeout
+        
+        stockfishWorker.postMessage('position fen ' + fen);
+        stockfishWorker.postMessage('go depth ' + depth);
+    });
+};
 
 // Initialize main board after page load
 window.addEventListener('load', function() {
@@ -428,18 +525,73 @@ window.addEventListener('load', function() {
 });
 
 // Handle custom messages from server to update board position
-if (typeof Shiny !== 'undefined') {
-    Shiny.addCustomMessageHandler('update_board', function(message) {
-        console.log('Update board message received:', message);
-        if (window.mainBoard) {
-            try {
-                window.mainBoard.position(message.fen);
-                console.log('Board position updated');
-            } catch(e) {
-                console.error('Error updating board:', e);
+// Register handlers when Shiny becomes available
+function registerShinyHandlers() {
+    if (typeof Shiny !== 'undefined' && Shiny.addCustomMessageHandler) {
+        console.log('✓ Shiny is available! Registering message handlers...');
+        
+        Shiny.addCustomMessageHandler('update_board', function(message) {
+            console.log('Update board message received:', message);
+            if (window.mainBoard) {
+                try {
+                    window.mainBoard.position(message.fen);
+                    console.log('Board position updated');
+                } catch(e) {
+                    console.error('Error updating board:', e);
+                }
+            }
+        });
+        
+        // Handle Stockfish evaluation requests
+        Shiny.addCustomMessageHandler('evaluate_stockfish', function(message) {
+            console.log('📥 Stockfish evaluation request received:', message);
+            console.log('   FEN:', message.fen);
+            console.log('   Depth:', message.depth);
+            console.log('   Request ID:', message.request_id);
+            
+            window.evaluateWithStockfish(message.fen, message.depth || 18)
+                .then(result => {
+                    console.log('✓ Stockfish evaluation complete:', result);
+                    console.log('📤 Sending to Shiny as stockfish_result_' + message.request_id);
+                    Shiny.setInputValue('stockfish_result_' + message.request_id, JSON.stringify(result), {priority: 'event'});
+                    console.log('✓ Result sent to Shiny');
+                })
+                .catch(error => {
+                    console.error('✗ Stockfish evaluation failed:', error);
+                    console.log('📤 Sending error to Shiny as stockfish_error_' + message.request_id);
+                    Shiny.setInputValue('stockfish_error_' + message.request_id, error.message, {priority: 'event'});
+                    console.log('✓ Error sent to Shiny');
+                });
+        });
+        
+        console.log('✓ Message handlers registered: update_board, evaluate_stockfish');
+        return true;
+    }
+    return false;
+}
+
+// Try to register immediately
+if (!registerShinyHandlers()) {
+    // If Shiny not ready, try multiple approaches
+    console.log('Shiny not ready yet, waiting...');
+    
+    // Try on shiny:connected event
+    $(document).on('shiny:connected', function() {
+        console.log('shiny:connected event fired');
+        registerShinyHandlers();
+    });
+    
+    // Also try polling for a bit
+    let attempts = 0;
+    const checkInterval = setInterval(function() {
+        attempts++;
+        if (registerShinyHandlers() || attempts > 20) {
+            clearInterval(checkInterval);
+            if (attempts > 20) {
+                console.error('✗ Failed to register Shiny handlers after 20 attempts');
             }
         }
-    });
+    }, 500);
 }
 </script>
 """
@@ -479,7 +631,23 @@ app_ui = ui.page_fluid(
             ui.div(
                 ui.input_action_button("analyze_position", "Analyze", class_="btn-primary", style="width: 48%; margin-right: 2%;"),
                 ui.input_action_button("reset_board", "Reset", class_="btn-secondary", style="width: 48%;"),
-                style="margin-top: 10px; margin-bottom: 15px;"
+                style="margin-top: 10px; margin-bottom: 10px;"
+            ),
+            
+            # Evaluation preference toggle
+            ui.div(
+                ui.input_radio_buttons(
+                    "eval_mode",
+                    "Evaluation:",
+                    choices={
+                        "local": "🖥️ Local (Stockfish.js)",
+                        "cloud": "☁️ Cloud (Lichess API)",
+                        "auto": "🔄 Auto (Local → Cloud)"
+                    },
+                    selected="auto",
+                    inline=True
+                ),
+                style="margin-bottom: 15px; font-size: 0.85em;"
             ),
             
             # Position summary
@@ -539,6 +707,10 @@ def server(input, output, session):
     
     # Track if board is initialized
     board_initialized = reactive.Value(False)
+    
+    # Track Stockfish evaluation requests
+    stockfish_request_id = reactive.Value(0)
+    stockfish_results = {}
     
     @reactive.Effect
     async def _init_board():
@@ -657,7 +829,7 @@ def server(input, output, session):
             # Fetch stats and evaluation for current position only
             fen = new_board.fen()
             stats_task = fetch_lichess_stats(fen)
-            eval_task = fetch_cloud_eval(fen)
+            eval_task = get_evaluation(fen)
             
             stats, evaluation = await asyncio.gather(stats_task, eval_task)
             position_stats.set(stats)
@@ -742,6 +914,99 @@ def server(input, output, session):
         except Exception as e:
             return {"error": str(e)}
     
+    async def evaluate_with_stockfish(fen: str, depth: int = 18) -> Dict[str, Any]:
+        """Evaluate position using local Stockfish.js."""
+        try:
+            request_id = stockfish_request_id() + 1
+            stockfish_request_id.set(request_id)
+            
+            result_key = f"stockfish_result_{request_id}"
+            error_key = f"stockfish_error_{request_id}"
+            
+            print(f"📤 Sending Stockfish request {request_id} for position: {fen[:50]}...")
+            print(f"   Will wait for: {result_key}")
+            
+            # Send request to JavaScript
+            await session.send_custom_message(
+                "evaluate_stockfish",
+                {"fen": fen, "depth": depth, "request_id": request_id}
+            )
+            
+            print(f"✓ Message sent to JavaScript")
+            
+            # Wait for result (with timeout)
+            for i in range(150):  # 15 second timeout (150 * 0.1s)
+                await asyncio.sleep(0.1)
+                
+                # Check for result
+                try:
+                    result_str = getattr(input, result_key, lambda: None)()
+                    if result_str:
+                        import json
+                        result = json.loads(result_str)
+                        print(f"✓ Stockfish result received: {result}")
+                        
+                        # Convert to Lichess format
+                        if result.get('cp') is not None:
+                            return {
+                                "pvs": [{"cp": result['cp']}],
+                                "depth": depth,
+                                "source": "stockfish.js"
+                            }
+                        elif result.get('mate') is not None:
+                            # Mate scores
+                            mate_in = result['mate']
+                            cp = 10000 if mate_in > 0 else -10000
+                            return {
+                                "pvs": [{"cp": cp, "mate": mate_in}],
+                                "depth": depth,
+                                "source": "stockfish.js"
+                            }
+                except:
+                    pass  # Result not ready yet
+                
+                # Check for error
+                try:
+                    error = getattr(input, error_key, lambda: None)()
+                    if error:
+                        print(f"✗ Stockfish error received: {error}")
+                        return {"error": f"Stockfish: {error}"}
+                except:
+                    pass  # Error not present yet
+            
+            return {"error": "Stockfish evaluation timeout (not responding)"}
+            
+        except Exception as e:
+            return {"error": f"Stockfish setup error: {str(e)}"}
+    
+    async def get_evaluation(fen: str) -> Dict[str, Any]:
+        """Get evaluation based on user preference (local, cloud, or auto)."""
+        mode = input.eval_mode() if hasattr(input, 'eval_mode') else "auto"
+        
+        if mode == "cloud":
+            # Cloud only
+            return await fetch_cloud_eval(fen)
+        
+        elif mode == "local":
+            # Local only
+            result = await evaluate_with_stockfish(fen)
+            if "error" in result:
+                # If local fails, still return error (don't fallback)
+                return result
+            return result
+        
+        else:  # auto mode
+            # Try local first, fallback to cloud
+            print(f"Attempting Stockfish evaluation for position...")
+            result = await evaluate_with_stockfish(fen)
+            if "error" not in result:
+                print(f"Stockfish evaluation successful")
+                return result
+            
+            # Fallback to cloud
+            print(f"Stockfish failed ({result.get('error')}), falling back to cloud API")
+            return await fetch_cloud_eval(fen)
+    
     @output
     @render.ui
     def position_summary():
@@ -767,10 +1032,15 @@ def server(input, output, session):
         
         # Evaluation
         eval_text = "Not analyzed"
+        eval_source = ""
         if evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
             cp = evaluation['pvs'][0].get('cp')
             if cp is not None:
                 eval_text = f"+{cp/100:.2f}" if cp >= 0 else f"{cp/100:.2f}"
+                if evaluation.get('source') == 'stockfish.js':
+                    eval_source = " <span style='color: hsl(88, 62%, 50%); font-size: 0.8em;'>(Local)</span>"
+                else:
+                    eval_source = " <span style='color: hsl(209, 79%, 56%); font-size: 0.8em;'>(Cloud)</span>"
         elif evaluation and 'error' in evaluation:
             eval_text = f"Error: {evaluation['error']}"
         
@@ -806,7 +1076,7 @@ def server(input, output, session):
                     <strong>Moves:</strong> <span style="color: hsl(0, 0%, 100%);">{move_history}</span>
                 </div>
                 <p><strong>{side_to_move}</strong></p>
-                <p><strong>Evaluation:</strong> <span style="color: hsl(0, 0%, 100%); font-weight: 700;">{eval_text}</span></p>
+                <p><strong>Evaluation:</strong> <span style="color: hsl(0, 0%, 100%); font-weight: 700;">{eval_text}</span>{eval_source}</p>
                 <hr>
                 {stats_html}
             </div>
@@ -1006,7 +1276,7 @@ def server(input, output, session):
             fen = test_board.fen()
             
             # Fetch evaluation and stats for this position
-            eval_task = fetch_cloud_eval(fen)
+            eval_task = get_evaluation(fen)
             stats_task = fetch_lichess_stats(fen)
             
             evaluation, stats = await asyncio.gather(eval_task, stats_task)
@@ -1036,7 +1306,7 @@ def server(input, output, session):
             fen = test_board.fen()
             
             # Fetch evaluation and stats for this position
-            eval_task = fetch_cloud_eval(fen)
+            eval_task = get_evaluation(fen)
             stats_task = fetch_lichess_stats(fen)
             
             evaluation, stats = await asyncio.gather(eval_task, stats_task)
