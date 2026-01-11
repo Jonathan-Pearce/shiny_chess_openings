@@ -85,7 +85,13 @@ body {
 .board-container {
     max-width: 100%;
     margin: 10px auto;
-    width: 100%;
+    width: 75%;
+}
+
+@media (max-width: 768px) {
+    .board-container {
+        width: 100%;
+    }
 }
 
 .board-container > div {
