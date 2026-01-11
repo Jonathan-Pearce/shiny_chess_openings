@@ -20,163 +20,366 @@ PRESETS = {
     "Ruy Lopez": "e4 e5 Nf3 Nc6 Bb5",
 }
 
-# Custom CSS for styling
+# Custom CSS for styling - LiChess inspired
 custom_css = """
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;700&display=swap');
+
+* {
+    font-family: 'Noto Sans', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+    background-color: hsl(37, 10%, 8%) !important;
+    color: hsl(0, 0%, 73%);
+}
+
+.card {
+    background-color: hsl(37, 7%, 14%);
+    border: none;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    border-radius: 4px;
+}
+
+.card-header {
+    background-color: hsl(37, 7%, 19%);
+    border-bottom: 1px solid hsl(0, 0%, 25%);
+    padding: 12px 15px;
+}
+
 .eval-bar {
     height: 30px;
-    background: linear-gradient(to right, #000 0%, #000 50%, #fff 50%, #fff 100%);
-    border: 2px solid #333;
-    border-radius: 5px;
+    background: linear-gradient(to right, #3d3d3d 0%, #3d3d3d 50%, #fff 50%, #fff 100%);
+    border: 1px solid #ccc;
+    border-radius: 3px;
     position: relative;
     margin: 10px 0;
 }
+
 .eval-indicator {
     position: absolute;
     height: 100%;
-    background-color: #4CAF50;
+    background-color: #759900;
     transition: left 0.3s ease;
-    border-radius: 3px;
+    border-radius: 2px;
 }
+
 .metric-card {
-    padding: 10px;
-    margin: 5px 0;
-    border-radius: 5px;
-    background-color: #f8f9fa;
+    padding: 12px;
+    margin: 8px 0;
+    border-radius: 4px;
+    background-color: hsl(37, 5%, 19%);
+    border: 1px solid hsl(0, 0%, 25%);
 }
+
 .better {
-    background-color: #d4edda !important;
-    border-left: 4px solid #28a745;
+    background-color: rgba(88, 153, 0, 0.2) !important;
+    border-left: 3px solid hsl(88, 62%, 37%);
 }
+
 .worse {
-    background-color: #f8d7da !important;
-    border-left: 4px solid #dc3545;
+    background-color: rgba(220, 50, 47, 0.2) !important;
+    border-left: 3px solid hsl(0, 60%, 50%);
 }
+
 .board-container {
     max-width: 100%;
     margin: 10px auto;
     width: 100%;
 }
+
 .board-container > div {
     width: 100% !important;
 }
+
 .move-history {
-    font-family: monospace;
-    padding: 10px;
-    background-color: #f8f9fa;
-    border-radius: 5px;
+    font-family: 'Noto Sans', monospace;
+    padding: 12px;
+    background-color: hsl(37, 5%, 19%);
+    border-radius: 4px;
     max-height: 100px;
     overflow-y: auto;
     margin-top: 10px;
+    border: 1px solid hsl(0, 0%, 25%);
+    font-size: 0.95em;
+    color: hsl(0, 0%, 80%);
 }
+
 .loading {
     text-align: center;
     padding: 20px;
-    color: #6c757d;
+    color: hsl(0, 0%, 58%);
 }
+
 .welcome-section {
-    background-color: #e7f3ff;
+    background-color: hsl(37, 7%, 14%);
     padding: 20px;
-    border-radius: 10px;
+    border-radius: 4px;
     margin-bottom: 20px;
-    border-left: 5px solid #007bff;
+    border-left: 4px solid hsl(22, 100%, 42%);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
 }
+
 .move-selector-panel {
-    background-color: #f8f9fa;
+    background-color: hsl(37, 7%, 14%);
     padding: 15px;
-    border-radius: 8px;
+    border-radius: 4px;
     margin-bottom: 15px;
-    border: 2px solid #dee2e6;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
 }
+
 .move-btn {
     margin: 5px;
-    padding: 10px 15px;
-    border: 2px solid #6c757d;
-    border-radius: 5px;
-    background-color: white;
+    padding: 10px 16px;
+    border: 2px solid hsl(0, 0%, 30%);
+    border-radius: 4px;
+    background-color: hsl(37, 5%, 19%);
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.15s ease;
+    font-weight: 500;
+    color: hsl(0, 0%, 80%);
 }
+
 .move-btn:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    background-color: hsl(37, 7%, 22%);
+    border-color: hsl(0, 0%, 40%);
+    transform: translateY(-1px);
+    box-shadow: 0 3px 8px rgba(0,0,0,0.4);
 }
+
 .move-btn.selected-a {
-    background-color: #0dcaf0;
-    border-color: #0dcaf0;
+    background-color: hsl(209, 79%, 56%);
+    border-color: hsl(209, 79%, 46%);
     color: white;
-    font-weight: bold;
+    font-weight: 700;
 }
+
 .move-btn.selected-b {
-    background-color: #198754;
-    border-color: #198754;
+    background-color: hsl(88, 62%, 37%);
+    border-color: hsl(88, 62%, 27%);
     color: white;
-    font-weight: bold;
+    font-weight: 700;
 }
+
 .move-btn:disabled {
-    opacity: 0.6;
+    opacity: 0.5;
     cursor: not-allowed;
 }
+
 .selection-legend {
     display: flex;
-    gap: 15px;
-    margin-bottom: 10px;
+    gap: 20px;
+    margin-bottom: 12px;
     font-size: 0.9em;
+    color: hsl(0, 0%, 80%);
 }
+
 .legend-item {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
+    font-weight: 500;
 }
+
 .legend-color {
-    width: 20px;
-    height: 20px;
+    width: 24px;
+    height: 24px;
     border-radius: 3px;
-    border: 1px solid #333;
+    border: 2px solid hsl(0, 0%, 50%);
 }
+
 .legend-color.color-a {
-    background-color: #0dcaf0;
+    background-color: hsl(209, 79%, 56%);
 }
+
 .legend-color.color-b {
-    background-color: #198754;
+    background-color: hsl(88, 62%, 37%);
 }
+
 .comparison-panel {
-    background-color: #fff;
+    background-color: hsl(37, 7%, 14%);
     padding: 15px;
-    border-radius: 8px;
+    border-radius: 4px;
     margin-top: 15px;
-    border: 2px solid #dee2e6;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
 }
+
 .comparison-table {
     width: 100%;
     border-collapse: collapse;
     margin-top: 10px;
 }
+
 .comparison-table th {
-    padding: 10px;
+    padding: 12px;
     text-align: center;
-    background-color: #f8f9fa;
-    border: 1px solid #dee2e6;
-    font-weight: bold;
+    background-color: hsl(37, 5%, 19%);
+    border: 1px solid hsl(0, 0%, 25%);
+    font-weight: 700;
+    color: hsl(0, 0%, 80%);
 }
+
 .comparison-table td {
-    padding: 10px;
+    padding: 12px;
     text-align: center;
-    border: 1px solid #dee2e6;
+    border: 1px solid hsl(0, 0%, 25%);
+    font-weight: 500;
+    color: hsl(0, 0%, 73%);
 }
+
 .comparison-table .metric-name {
     text-align: left;
-    font-weight: 500;
+    font-weight: 600;
+    background-color: hsl(37, 7%, 16%);
 }
+
 .comparison-table .winner {
-    background-color: #d4edda;
-    font-weight: bold;
+    background-color: rgba(88, 153, 0, 0.2);
+    font-weight: 700;
+    color: hsl(88, 62%, 50%);
 }
+
 .comparison-table .loser {
-    background-color: #f8d7da;
+    background-color: rgba(220, 50, 47, 0.2);
+    font-weight: 700;
+    color: hsl(0, 60%, 60%);
 }
+
 .comparison-table .tie {
-    background-color: #fff3cd;
+    background-color: rgba(181, 137, 0, 0.2);
+    font-weight: 600;
+    color: hsl(37, 74%, 53%);
+}
+
+.btn-primary {
+    background-color: hsl(22, 100%, 42%) !important;
+    border-color: hsl(22, 100%, 42%) !important;
+    font-weight: 600;
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: hsl(22, 100%, 35%) !important;
+    border-color: hsl(22, 100%, 35%) !important;
+}
+
+.btn-secondary {
+    background-color: hsl(0, 0%, 25%) !important;
+    border-color: hsl(0, 0%, 25%) !important;
+    font-weight: 600;
+    color: hsl(0, 0%, 80%);
+}
+
+.btn-secondary:hover {
+    background-color: hsl(0, 0%, 30%) !important;
+    border-color: hsl(0, 0%, 30%) !important;
+}
+
+.btn-info {
+    background-color: hsl(209, 79%, 56%) !important;
+    border-color: hsl(209, 79%, 46%) !important;
+    font-weight: 600;
+    color: white;
+}
+
+.btn-info:hover {
+    background-color: hsl(209, 79%, 46%) !important;
+    border-color: hsl(209, 79%, 36%) !important;
+}
+
+input[type="text"], select {
+    border: 2px solid hsl(0, 0%, 30%) !important;
+    border-radius: 4px !important;
+    padding: 8px 12px !important;
+    font-family: 'Noto Sans', sans-serif !important;
+    background-color: hsl(37, 7%, 13%) !important;
+    color: hsl(0, 0%, 80%) !important;
+}
+
+input[type="text"]:focus, select:focus {
+    border-color: hsl(22, 100%, 42%) !important;
+    outline: none !important;
+    box-shadow: 0 0 0 2px rgba(216, 80, 0, 0.2) !important;
+}
+
+hr {
+    border-top: 1px solid hsl(0, 0%, 25%);
+}
+
+h4, h5, h6 {
+    color: hsl(0, 0%, 80%);
+    font-weight: 700;
+}
+
+a {
+    color: hsl(209, 79%, 56%);
+    text-decoration: none;
+}
+
+a:hover {
+    color: hsl(209, 79%, 66%);
+    text-decoration: underline;
+}
+
+/* LiChess box patterns */
+.box__pad {
+    padding: 20px;
+}
+
+/* Better shadows and depth */
+.card:hover {
+    box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    transition: box-shadow 0.15s ease;
+}
+
+/* LiChess-style headers */
+h1, h2, h3 {
+    font-weight: 700;
+    margin-bottom: 0.5em;
+    color: hsl(0, 0%, 89%);
+}
+
+/* Better spacing for lists */
+ul {
+    margin: 0.5em 0;
+}
+
+/* Smooth all transitions */
+button, .move-btn, .card {
+    transition: all 0.15s ease;
+}
+
+/* Focus states */
+button:focus, .move-btn:focus {
+    outline: 2px solid hsl(22, 100%, 42%);
+    outline-offset: 2px;
+}
+
+/* Loading states */
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.loading {
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* Better table styling */
+table {
+    border-collapse: collapse;
+}
+
+/* LiChess-style emphasis */
+strong {
+    font-weight: 700;
+    color: hsl(0, 0%, 89%);
+}
+
+/* Small text styling */
+small {
+    font-size: 0.85em;
+    color: hsl(0, 0%, 58%);
 }
 </style>
 """
@@ -293,7 +496,7 @@ app_ui = ui.page_fluid(
                 # Column 2: Candidate Move A
                 ui.card(
                     ui.card_header(
-                        ui.h4("Candidate Move A", style="margin: 0; font-size: 1.1rem; color: #0dcaf0;")
+                        ui.h4("Candidate Move A", style="margin: 0; font-size: 1.1rem; color: hsl(209, 79%, 56%);")
                     ),
                     ui.output_ui("move_a_details"),
                 ),
@@ -301,7 +504,7 @@ app_ui = ui.page_fluid(
                 # Column 3: Candidate Move B
                 ui.card(
                     ui.card_header(
-                        ui.h4("Candidate Move B", style="margin: 0; font-size: 1.1rem; color: #198754;")
+                        ui.h4("Candidate Move B", style="margin: 0; font-size: 1.1rem; color: hsl(88, 62%, 37%);")
                     ),
                     ui.output_ui("move_b_details"),
                 ),
@@ -351,7 +554,7 @@ def server(input, output, session):
     @reactive.event(input.show_info)
     def _show_info():
         m = ui.modal(
-            ui.h3("♟️ Chess Position Analyzer"),
+            ui.h3("♟️ Chess Position Analyzer", style="color: #d85000; font-weight: 700;"),
             ui.p(
                 "Analyze chess positions with interactive board. Set up a position using presets or by entering moves, "
                 "then select two candidate moves to compare their evaluations and statistics."
@@ -585,25 +788,25 @@ def server(input, output, session):
                 draw_pct = round(stats.get("draws", 0) / total_games * 100, 1)
                 black_pct = round(stats.get("black", 0) / total_games * 100, 1)
                 stats_html = f"""
-                    <p><strong>Total Lichess Games:</strong> {total_games:,}</p>
+                    <p><strong>Total Lichess Games:</strong> <span style="color: hsl(0, 0%, 100%); font-weight: 700;">{total_games:,}</span></p>
                     <p><strong>Results:</strong></p>
-                    <ul style="margin: 5px 0; padding-left: 20px;">
-                        <li>White wins: {white_pct}%</li>
-                        <li>Draws: {draw_pct}%</li>
-                        <li>Black wins: {black_pct}%</li>
+                    <ul style="margin: 5px 0; padding-left: 20px; color: hsl(0, 0%, 100%);">
+                        <li>White wins: <span style="font-weight: 700;">{white_pct}%</span></li>
+                        <li>Draws: <span style="font-weight: 700;">{draw_pct}%</span></li>
+                        <li>Black wins: <span style="font-weight: 700;">{black_pct}%</span></li>
                     </ul>
                 """
         elif stats and 'error' in stats:
-            stats_html = f"<p style='color: red;'>Stats error: {stats['error']}</p>"
+            stats_html = f"<p style='color: hsl(0, 60%, 60%);'>Stats error: {stats['error']}</p>"
         
         return ui.HTML(f"""
             <div class="metric-card" style="height: 100%;">
-                <h4>📊 Position Summary</h4>
-                <div class="move-history" style="margin-bottom: 15px;">
-                    <strong>Moves:</strong> {move_history}
+                <h4 style="color: hsl(0, 0%, 89%); font-weight: 700; margin-bottom: 10px;">📊 Position Summary</h4>
+                <div class="move-history" style="margin-bottom: 15px; color: hsl(0, 0%, 89%);">
+                    <strong>Moves:</strong> <span style="color: hsl(0, 0%, 100%);">{move_history}</span>
                 </div>
                 <p><strong>{side_to_move}</strong></p>
-                <p><strong>Evaluation:</strong> {eval_text}</p>
+                <p><strong>Evaluation:</strong> <span style="color: hsl(0, 0%, 100%); font-weight: 700;">{eval_text}</span></p>
                 <hr>
                 {stats_html}
             </div>
@@ -683,7 +886,7 @@ def server(input, output, session):
             dropdown_choices[move_san] = move_san
         
         return ui.card(
-            ui.card_header(ui.h4("📋 Select Candidate Moves", style="margin: 0;")),
+            ui.card_header(ui.h4("📋 Select Candidate Moves", style="margin: 0; font-weight: 700;")),
             ui.div(
                 {"class": "move-selector-panel"},
                 # Legend
@@ -864,19 +1067,19 @@ def server(input, output, session):
             )
         
         # Evaluation for move A
-        eval_html = "<p><em>No evaluation available</em></p>"
+        eval_html = "<p style='color: hsl(0, 0%, 73%);'><em>No evaluation available</em></p>"
         if evaluation and 'error' in evaluation:
-            eval_html = f"<p style='color: #dc3545;'><small>Eval error: {evaluation['error']}</small></p>"
+            eval_html = f"<p style='color: hsl(0, 60%, 60%);'><small>Eval error: {evaluation['error']}</small></p>"
         elif evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
             cp_a = evaluation['pvs'][0].get('cp')
             if cp_a is not None:
                 eval_text = f"+{cp_a/100:.2f}" if cp_a >= 0 else f"{cp_a/100:.2f}"
-                eval_html = f"<p><strong>Evaluation:</strong> {eval_text}</p>"
+                eval_html = f"<p><strong>Evaluation:</strong> <span style='color: hsl(0, 0%, 100%); font-weight: 700; font-size: 1.1em;'>{eval_text}</span></p>"
         
         # Stats for move A
-        stats_html = "<p><em>No statistics available</em></p>"
+        stats_html = "<p style='color: hsl(0, 0%, 73%);'><em>No statistics available</em></p>"
         if stats and 'error' in stats:
-            stats_html = f"<p style='color: #dc3545;'><small>Stats error: {stats['error']}</small></p>"
+            stats_html = f"<p style='color: hsl(0, 60%, 60%);'><small>Stats error: {stats['error']}</small></p>"
         elif stats and 'error' not in stats:
             total_a = stats.get("white", 0) + stats.get("draws", 0) + stats.get("black", 0)
             if total_a > 0:
@@ -884,18 +1087,18 @@ def server(input, output, session):
                 draw_pct = round(stats.get("draws", 0) / total_a * 100, 1)
                 black_pct = round(stats.get("black", 0) / total_a * 100, 1)
                 stats_html = f"""
-                    <p><strong>Total Games:</strong> {total_a:,}</p>
+                    <p><strong>Total Games:</strong> <span style="color: hsl(0, 0%, 100%); font-weight: 700;">{total_a:,}</span></p>
                     <p><strong>Results:</strong></p>
-                    <ul style="margin: 5px 0; padding-left: 20px;">
-                        <li>White: {white_pct_a}%</li>
-                        <li>Draw: {draw_pct}%</li>
-                        <li>Black: {black_pct}%</li>
+                    <ul style="margin: 5px 0; padding-left: 20px; color: hsl(0, 0%, 100%);">
+                        <li>White: <span style="font-weight: 700;">{white_pct_a}%</span></li>
+                        <li>Draw: <span style="font-weight: 700;">{draw_pct}%</span></li>
+                        <li>Black: <span style="font-weight: 700;">{black_pct}%</span></li>
                     </ul>
                 """
         
         return ui.HTML(f"""
             <div class="metric-card" style="height: 100%;">
-                <h5 style="color: #0dcaf0; margin-top: 0;">{move_san}</h5>
+                <h5 style="color: hsl(209, 79%, 56%); margin-top: 0;">{move_san}</h5>
                 {eval_html}
                 <hr style="margin: 10px 0;">
                 {stats_html}
@@ -923,19 +1126,19 @@ def server(input, output, session):
             )
         
         # Evaluation for move B
-        eval_html = "<p><em>No evaluation available</em></p>"
+        eval_html = "<p style='color: hsl(0, 0%, 73%);'><em>No evaluation available</em></p>"
         if evaluation and 'error' in evaluation:
-            eval_html = f"<p style='color: #dc3545;'><small>Eval error: {evaluation['error']}</small></p>"
+            eval_html = f"<p style='color: hsl(0, 60%, 60%);'><small>Eval error: {evaluation['error']}</small></p>"
         elif evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
             cp_b = evaluation['pvs'][0].get('cp')
             if cp_b is not None:
                 eval_text = f"+{cp_b/100:.2f}" if cp_b >= 0 else f"{cp_b/100:.2f}"
-                eval_html = f"<p><strong>Evaluation:</strong> {eval_text}</p>"
+                eval_html = f"<p><strong>Evaluation:</strong> <span style='color: hsl(0, 0%, 100%); font-weight: 700; font-size: 1.1em;'>{eval_text}</span></p>"
         
         # Stats for move B
-        stats_html = "<p><em>No statistics available</em></p>"
+        stats_html = "<p style='color: hsl(0, 0%, 73%);'><em>No statistics available</em></p>"
         if stats and 'error' in stats:
-            stats_html = f"<p style='color: #dc3545;'><small>Stats error: {stats['error']}</small></p>"
+            stats_html = f"<p style='color: hsl(0, 60%, 60%);'><small>Stats error: {stats['error']}</small></p>"
         elif stats and 'error' not in stats:
             total_b = stats.get("white", 0) + stats.get("draws", 0) + stats.get("black", 0)
             if total_b > 0:
@@ -943,18 +1146,18 @@ def server(input, output, session):
                 draw_pct = round(stats.get("draws", 0) / total_b * 100, 1)
                 black_pct = round(stats.get("black", 0) / total_b * 100, 1)
                 stats_html = f"""
-                    <p><strong>Total Games:</strong> {total_b:,}</p>
+                    <p><strong>Total Games:</strong> <span style="color: hsl(0, 0%, 100%); font-weight: 700;">{total_b:,}</span></p>
                     <p><strong>Results:</strong></p>
-                    <ul style="margin: 5px 0; padding-left: 20px;">
-                        <li>White: {white_pct_b}%</li>
-                        <li>Draw: {draw_pct}%</li>
-                        <li>Black: {black_pct}%</li>
+                    <ul style="margin: 5px 0; padding-left: 20px; color: hsl(0, 0%, 100%);">
+                        <li>White: <span style="font-weight: 700;">{white_pct_b}%</span></li>
+                        <li>Draw: <span style="font-weight: 700;">{draw_pct}%</span></li>
+                        <li>Black: <span style="font-weight: 700;">{black_pct}%</span></li>
                     </ul>
                 """
         
         return ui.HTML(f"""
             <div class="metric-card" style="height: 100%;">
-                <h5 style="color: #198754; margin-top: 0;">{move_san}</h5>
+                <h5 style="color: hsl(88, 62%, 37%); margin-top: 0;">{move_san}</h5>
                 {eval_html}
                 <hr style="margin: 10px 0;">
                 {stats_html}
@@ -1094,8 +1297,8 @@ def server(input, output, session):
                         <thead>
                             <tr>
                                 <th class="metric-name">Metric</th>
-                                <th style="color: #0dcaf0;">{move_a_san}</th>
-                                <th style="color: #198754;">{move_b_san}</th>
+                                <th style="color: hsl(209, 79%, 56%); font-weight: 700;">{move_a_san}</th>
+                                <th style="color: hsl(88, 62%, 37%); font-weight: 700;">{move_b_san}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1126,10 +1329,10 @@ def server(input, output, session):
                             </tr>
                         </tbody>
                     </table>
-                    <p style="margin-top: 15px; font-size: 0.85em; color: #6c757d; text-align: center;">
-                        <span style="background-color: #d4edda; padding: 3px 8px; border-radius: 3px; margin: 0 5px;">Green</span> = Better
-                        <span style="background-color: #f8d7da; padding: 3px 8px; border-radius: 3px; margin: 0 5px;">Red</span> = Worse
-                        <span style="background-color: #fff3cd; padding: 3px 8px; border-radius: 3px; margin: 0 5px;">Yellow</span> = Tied
+                    <p style="margin-top: 15px; font-size: 0.85em; color: hsl(0, 0%, 58%); text-align: center;">
+                        <span style="background-color: rgba(88, 153, 0, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(88, 62%, 50%);">Green</span> = Better
+                        <span style="background-color: rgba(220, 50, 47, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(0, 60%, 60%);">Red</span> = Worse
+                        <span style="background-color: rgba(181, 137, 0, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(37, 74%, 53%);">Yellow</span> = Tied
                     </p>
                 </div>
             """)
