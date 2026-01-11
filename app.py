@@ -140,6 +140,44 @@ custom_css = """
 .legend-color.color-b {
     background-color: #198754;
 }
+.comparison-panel {
+    background-color: #fff;
+    padding: 15px;
+    border-radius: 8px;
+    margin-top: 15px;
+    border: 2px solid #dee2e6;
+}
+.comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+.comparison-table th {
+    padding: 10px;
+    text-align: center;
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    font-weight: bold;
+}
+.comparison-table td {
+    padding: 10px;
+    text-align: center;
+    border: 1px solid #dee2e6;
+}
+.comparison-table .metric-name {
+    text-align: left;
+    font-weight: 500;
+}
+.comparison-table .winner {
+    background-color: #d4edda;
+    font-weight: bold;
+}
+.comparison-table .loser {
+    background-color: #f8d7da;
+}
+.comparison-table .tie {
+    background-color: #fff3cd;
+}
 </style>
 """
 
@@ -269,6 +307,9 @@ app_ui = ui.page_fluid(
                 ),
                 col_widths=[6, 6],
             ),
+            
+            # Shared comparison panel
+            ui.output_ui("comparison_panel"),
         ),
         col_widths=[4, 8],
     ),
@@ -815,30 +856,28 @@ def server(input, output, session):
                 ui.p("Click a move from the selection panel above", style="text-align: center; padding: 20px; color: #6c757d;")
             )
         
-        # Get move B data for comparison
-        move_b_san = selected_move_b()
-        stats_b = move_b_stats()
-        eval_b = move_b_eval()
+        # Check if data is still loading
+        if not stats and not evaluation:
+            return ui.div(
+                {"class": "loading"},
+                ui.p("⏳ Loading data...", style="text-align: center; padding: 20px;")
+            )
         
         # Evaluation for move A
-        cp_a = None
-        eval_html = "<p>No evaluation available</p>"
-        if evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
+        eval_html = "<p><em>No evaluation available</em></p>"
+        if evaluation and 'error' in evaluation:
+            eval_html = f"<p style='color: #dc3545;'><small>Eval error: {evaluation['error']}</small></p>"
+        elif evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
             cp_a = evaluation['pvs'][0].get('cp')
             if cp_a is not None:
                 eval_text = f"+{cp_a/100:.2f}" if cp_a >= 0 else f"{cp_a/100:.2f}"
                 eval_html = f"<p><strong>Evaluation:</strong> {eval_text}</p>"
         
-        # Evaluation for move B (for comparison)
-        cp_b = None
-        if eval_b and 'pvs' in eval_b and len(eval_b['pvs']) > 0:
-            cp_b = eval_b['pvs'][0].get('cp')
-        
         # Stats for move A
-        total_a = 0
-        white_pct_a = 0
-        stats_html = "<p>No statistics available</p>"
-        if stats and 'error' not in stats:
+        stats_html = "<p><em>No statistics available</em></p>"
+        if stats and 'error' in stats:
+            stats_html = f"<p style='color: #dc3545;'><small>Stats error: {stats['error']}</small></p>"
+        elif stats and 'error' not in stats:
             total_a = stats.get("white", 0) + stats.get("draws", 0) + stats.get("black", 0)
             if total_a > 0:
                 white_pct_a = round(stats.get("white", 0) / total_a * 100, 1)
@@ -846,6 +885,7 @@ def server(input, output, session):
                 black_pct = round(stats.get("black", 0) / total_a * 100, 1)
                 stats_html = f"""
                     <p><strong>Total Games:</strong> {total_a:,}</p>
+                    <p><strong>Results:</strong></p>
                     <ul style="margin: 5px 0; padding-left: 20px;">
                         <li>White: {white_pct_a}%</li>
                         <li>Draw: {draw_pct}%</li>
@@ -853,43 +893,12 @@ def server(input, output, session):
                     </ul>
                 """
         
-        # Stats for move B (for comparison)
-        total_b = 0
-        white_pct_b = 0
-        if stats_b and 'error' not in stats_b:
-            total_b = stats_b.get("white", 0) + stats_b.get("draws", 0) + stats_b.get("black", 0)
-            if total_b > 0:
-                white_pct_b = stats_b.get("white", 0) / total_b * 100
-        
-        # Comparison section
-        comparison_html = ""
-        if move_b_san:
-            comparison_html = "<hr><h6>Comparison vs Move B:</h6>"
-            
-            # Eval comparison
-            eval_class = ""
-            eval_comparison = ""
-            if cp_a is not None and cp_b is not None:
-                eval_class = "better" if cp_a > cp_b else ("worse" if cp_a < cp_b else "")
-                diff = (cp_a - cp_b) / 100
-                eval_comparison = f"<div class='metric-card {eval_class}'><strong>Eval:</strong> {diff:+.2f} pawns</div>"
-            
-            # Win rate comparison
-            win_class = ""
-            win_comparison = ""
-            if total_a > 0 and total_b > 0:
-                win_class = "better" if white_pct_a > white_pct_b else ("worse" if white_pct_a < white_pct_b else "")
-                diff = white_pct_a - white_pct_b
-                win_comparison = f"<div class='metric-card {win_class}'><strong>White Win Rate:</strong> {diff:+.1f}%</div>"
-            
-            comparison_html += eval_comparison + win_comparison
-        
         return ui.HTML(f"""
-            <div class="metric-card">
-                <h5>{move_san}</h5>
+            <div class="metric-card" style="height: 100%;">
+                <h5 style="color: #0dcaf0; margin-top: 0;">{move_san}</h5>
                 {eval_html}
+                <hr style="margin: 10px 0;">
                 {stats_html}
-                {comparison_html}
             </div>
         """)
     
@@ -906,30 +915,28 @@ def server(input, output, session):
                 ui.p("Click a move from the selection panel above", style="text-align: center; padding: 20px; color: #6c757d;")
             )
         
-        # Get move A data for comparison
-        move_a_san = selected_move_a()
-        stats_a = move_a_stats()
-        eval_a = move_a_eval()
+        # Check if data is still loading
+        if not stats and not evaluation:
+            return ui.div(
+                {"class": "loading"},
+                ui.p("⏳ Loading data...", style="text-align: center; padding: 20px;")
+            )
         
         # Evaluation for move B
-        cp_b = None
-        eval_html = "<p>No evaluation available</p>"
-        if evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
+        eval_html = "<p><em>No evaluation available</em></p>"
+        if evaluation and 'error' in evaluation:
+            eval_html = f"<p style='color: #dc3545;'><small>Eval error: {evaluation['error']}</small></p>"
+        elif evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
             cp_b = evaluation['pvs'][0].get('cp')
             if cp_b is not None:
                 eval_text = f"+{cp_b/100:.2f}" if cp_b >= 0 else f"{cp_b/100:.2f}"
                 eval_html = f"<p><strong>Evaluation:</strong> {eval_text}</p>"
         
-        # Evaluation for move A (for comparison)
-        cp_a = None
-        if eval_a and 'pvs' in eval_a and len(eval_a['pvs']) > 0:
-            cp_a = eval_a['pvs'][0].get('cp')
-        
         # Stats for move B
-        total_b = 0
-        white_pct_b = 0
-        stats_html = "<p>No statistics available</p>"
-        if stats and 'error' not in stats:
+        stats_html = "<p><em>No statistics available</em></p>"
+        if stats and 'error' in stats:
+            stats_html = f"<p style='color: #dc3545;'><small>Stats error: {stats['error']}</small></p>"
+        elif stats and 'error' not in stats:
             total_b = stats.get("white", 0) + stats.get("draws", 0) + stats.get("black", 0)
             if total_b > 0:
                 white_pct_b = round(stats.get("white", 0) / total_b * 100, 1)
@@ -937,6 +944,7 @@ def server(input, output, session):
                 black_pct = round(stats.get("black", 0) / total_b * 100, 1)
                 stats_html = f"""
                     <p><strong>Total Games:</strong> {total_b:,}</p>
+                    <p><strong>Results:</strong></p>
                     <ul style="margin: 5px 0; padding-left: 20px;">
                         <li>White: {white_pct_b}%</li>
                         <li>Draw: {draw_pct}%</li>
@@ -944,46 +952,188 @@ def server(input, output, session):
                     </ul>
                 """
         
-        # Stats for move A (for comparison)
-        total_a = 0
-        white_pct_a = 0
-        if stats_a and 'error' not in stats_a:
-            total_a = stats_a.get("white", 0) + stats_a.get("draws", 0) + stats_a.get("black", 0)
-            if total_a > 0:
-                white_pct_a = stats_a.get("white", 0) / total_a * 100
-        
-        # Comparison section
-        comparison_html = ""
-        if move_a_san:
-            comparison_html = "<hr><h6>Comparison vs Move A:</h6>"
-            
-            # Eval comparison
-            eval_class = ""
-            eval_comparison = ""
-            if cp_b is not None and cp_a is not None:
-                eval_class = "better" if cp_b > cp_a else ("worse" if cp_b < cp_a else "")
-                diff = (cp_b - cp_a) / 100
-                eval_comparison = f"<div class='metric-card {eval_class}'><strong>Eval:</strong> {diff:+.2f} pawns</div>"
-            
-            # Win rate comparison
-            win_class = ""
-            win_comparison = ""
-            if total_b > 0 and total_a > 0:
-                win_class = "better" if white_pct_b > white_pct_a else ("worse" if white_pct_b < white_pct_a else "")
-                diff = white_pct_b - white_pct_a
-                win_comparison = f"<div class='metric-card {win_class}'><strong>White Win Rate:</strong> {diff:+.1f}%</div>"
-            
-            comparison_html += eval_comparison + win_comparison
-        
         return ui.HTML(f"""
-            <div class="metric-card">
-                <h5>{move_san}</h5>
+            <div class="metric-card" style="height: 100%;">
+                <h5 style="color: #198754; margin-top: 0;">{move_san}</h5>
                 {eval_html}
+                <hr style="margin: 10px 0;">
                 {stats_html}
-                {comparison_html}
             </div>
         """)
     
+
+    @output
+    @render.ui
+    def comparison_panel():
+        move_a_san = selected_move_a()
+        move_b_san = selected_move_b()
+        
+        # Only show if both moves are selected
+        if not move_a_san or not move_b_san:
+            return ui.div()
+        
+        stats_a = move_a_stats()
+        eval_a = move_a_eval()
+        stats_b = move_b_stats()
+        eval_b = move_b_eval()
+        
+        # Check if data is loaded
+        if not stats_a or not stats_b or not eval_a or not eval_b:
+            return ui.card(
+                ui.card_header(ui.h4("📊 Head-to-Head Comparison", style="margin: 0;")),
+                ui.div(
+                    {"class": "loading"},
+                    ui.p("⏳ Loading comparison data...", style="text-align: center; padding: 20px;")
+                )
+            )
+        
+        # Extract evaluation data
+        cp_a = None
+        cp_b = None
+        eval_a_text = "N/A"
+        eval_b_text = "N/A"
+        
+        if eval_a and 'pvs' in eval_a and len(eval_a['pvs']) > 0:
+            cp_a = eval_a['pvs'][0].get('cp')
+            if cp_a is not None:
+                eval_a_text = f"+{cp_a/100:.2f}" if cp_a >= 0 else f"{cp_a/100:.2f}"
+        
+        if eval_b and 'pvs' in eval_b and len(eval_b['pvs']) > 0:
+            cp_b = eval_b['pvs'][0].get('cp')
+            if cp_b is not None:
+                eval_b_text = f"+{cp_b/100:.2f}" if cp_b >= 0 else f"{cp_b/100:.2f}"
+        
+        # Determine eval winner
+        eval_a_class = ""
+        eval_b_class = ""
+        if cp_a is not None and cp_b is not None:
+            if cp_a > cp_b:
+                eval_a_class = "winner"
+                eval_b_class = "loser"
+            elif cp_b > cp_a:
+                eval_b_class = "winner"
+                eval_a_class = "loser"
+            else:
+                eval_a_class = eval_b_class = "tie"
+        
+        # Extract stats data
+        total_a = stats_a.get("white", 0) + stats_a.get("draws", 0) + stats_a.get("black", 0)
+        total_b = stats_b.get("white", 0) + stats_b.get("draws", 0) + stats_b.get("black", 0)
+        
+        white_pct_a = 0
+        draw_pct_a = 0
+        black_pct_a = 0
+        white_pct_b = 0
+        draw_pct_b = 0
+        black_pct_b = 0
+        
+        if total_a > 0:
+            white_pct_a = round(stats_a.get("white", 0) / total_a * 100, 1)
+            draw_pct_a = round(stats_a.get("draws", 0) / total_a * 100, 1)
+            black_pct_a = round(stats_a.get("black", 0) / total_a * 100, 1)
+        
+        if total_b > 0:
+            white_pct_b = round(stats_b.get("white", 0) / total_b * 100, 1)
+            draw_pct_b = round(stats_b.get("draws", 0) / total_b * 100, 1)
+            black_pct_b = round(stats_b.get("black", 0) / total_b * 100, 1)
+        
+        # Determine win rate winners
+        white_a_class = ""
+        white_b_class = ""
+        if total_a > 0 and total_b > 0:
+            if white_pct_a > white_pct_b:
+                white_a_class = "winner"
+                white_b_class = "loser"
+            elif white_pct_b > white_pct_a:
+                white_b_class = "winner"
+                white_a_class = "loser"
+            else:
+                white_a_class = white_b_class = "tie"
+        
+        draw_a_class = ""
+        draw_b_class = ""
+        if total_a > 0 and total_b > 0:
+            if draw_pct_a > draw_pct_b:
+                draw_a_class = "winner"
+                draw_b_class = "loser"
+            elif draw_pct_b > draw_pct_a:
+                draw_b_class = "winner"
+                draw_a_class = "loser"
+            else:
+                draw_a_class = draw_b_class = "tie"
+        
+        black_a_class = ""
+        black_b_class = ""
+        if total_a > 0 and total_b > 0:
+            if black_pct_a > black_pct_b:
+                black_a_class = "winner"
+                black_b_class = "loser"
+            elif black_pct_b > black_pct_a:
+                black_b_class = "winner"
+                black_a_class = "loser"
+            else:
+                black_a_class = black_b_class = "tie"
+        
+        # Determine total games winner (more data is better for reliability)
+        games_a_class = ""
+        games_b_class = ""
+        if total_a > total_b:
+            games_a_class = "winner"
+            games_b_class = "loser"
+        elif total_b > total_a:
+            games_b_class = "winner"
+            games_a_class = "loser"
+        else:
+            games_a_class = games_b_class = "tie"
+        
+        return ui.card(
+            ui.card_header(ui.h4("📊 Head-to-Head Comparison", style="margin: 0;")),
+            ui.HTML(f"""
+                <div class="comparison-panel">
+                    <table class="comparison-table">
+                        <thead>
+                            <tr>
+                                <th class="metric-name">Metric</th>
+                                <th style="color: #0dcaf0;">{move_a_san}</th>
+                                <th style="color: #198754;">{move_b_san}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td class="metric-name">Engine Evaluation</td>
+                                <td class="{eval_a_class}">{eval_a_text}</td>
+                                <td class="{eval_b_class}">{eval_b_text}</td>
+                            </tr>
+                            <tr>
+                                <td class="metric-name">Total Games</td>
+                                <td class="{games_a_class}">{total_a:,}</td>
+                                <td class="{games_b_class}">{total_b:,}</td>
+                            </tr>
+                            <tr>
+                                <td class="metric-name">White Win %</td>
+                                <td class="{white_a_class}">{white_pct_a}%</td>
+                                <td class="{white_b_class}">{white_pct_b}%</td>
+                            </tr>
+                            <tr>
+                                <td class="metric-name">Draw %</td>
+                                <td class="{draw_a_class}">{draw_pct_a}%</td>
+                                <td class="{draw_b_class}">{draw_pct_b}%</td>
+                            </tr>
+                            <tr>
+                                <td class="metric-name">Black Win %</td>
+                                <td class="{black_a_class}">{black_pct_a}%</td>
+                                <td class="{black_b_class}">{black_pct_b}%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <p style="margin-top: 15px; font-size: 0.85em; color: #6c757d; text-align: center;">
+                        <span style="background-color: #d4edda; padding: 3px 8px; border-radius: 3px; margin: 0 5px;">Green</span> = Better
+                        <span style="background-color: #f8d7da; padding: 3px 8px; border-radius: 3px; margin: 0 5px;">Red</span> = Worse
+                        <span style="background-color: #fff3cd; padding: 3px 8px; border-radius: 3px; margin: 0 5px;">Yellow</span> = Tied
+                    </p>
+                </div>
+            """)
+        )
 
 
 app = App(app_ui, server)
