@@ -387,6 +387,47 @@ small {
     font-size: 0.85em;
     color: hsl(0, 0%, 58%);
 }
+
+/* Chessboard square highlighting */
+.highlight-selected {
+    box-shadow: inset 0 0 0 3px rgba(255, 255, 0, 0.8) !important;
+}
+
+.highlight-possible {
+    position: relative;
+}
+
+.highlight-possible::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 30%;
+    height: 30%;
+    background-color: rgba(88, 153, 0, 0.6);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+/* For capture squares, make the circle a ring instead */
+.highlight-possible.capture::after {
+    width: 85%;
+    height: 85%;
+    background-color: transparent;
+    border: 4px solid rgba(220, 50, 47, 0.7);
+    border-radius: 50%;
+}
+
+/* Smooth cursor changes */
+#mainBoard .square-55d63 {
+    cursor: pointer;
+    transition: box-shadow 0.15s ease;
+}
+
+#mainBoard .square-55d63:hover {
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.2);
+}
 </style>
 """
 
@@ -500,6 +541,32 @@ window.evaluateWithStockfish = function(fen, depth = 9) {
     });
 };
 
+// Board interaction state
+let selectedSquare = null;
+let boardLegalMoves = [];
+let isDragging = false;
+let dragStartTime = 0;
+let pendingMove = null; // Track pending move for smooth animation
+
+// Helper to remove all square highlights
+function removeHighlights() {
+    $('#mainBoard .square-55d63').removeClass('highlight-possible highlight-selected capture');
+}
+
+// Helper to highlight squares
+function highlightSquare(square, cssClass) {
+    const squareEl = $('#mainBoard .square-' + square);
+    squareEl.addClass(cssClass);
+}
+
+// Get legal moves from current position via Shiny
+function getLegalMovesForSquare(square) {
+    // Request legal moves from Shiny
+    if (typeof Shiny !== 'undefined') {
+        Shiny.setInputValue('get_legal_moves', square, {priority: 'event'});
+    }
+}
+
 // Initialize main board after page load
 window.addEventListener('load', function() {
     console.log('Window loaded, checking for Chessboard...');
@@ -517,15 +584,111 @@ window.addEventListener('load', function() {
                     position: 'start',
                     draggable: true,
                     pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+                    moveSpeed: 200,  // Smoother animations (ms)
+                    snapbackSpeed: 100,  // Faster snapback for invalid moves
+                    snapSpeed: 100,  // Faster snap to square
+                    onDragStart: function(source, piece, position, orientation) {
+                        // Mark that we're dragging
+                        isDragging = true;
+                        dragStartTime = Date.now();
+                        // Highlight possible moves when starting to drag
+                        selectedSquare = source;
+                        getLegalMovesForSquare(source);
+                        highlightSquare(source, 'highlight-selected');
+                        return true;
+                    },
                     onDrop: function(source, target) {
-                        console.log('Move attempted:', source, target);
+                        console.log('Drop move attempted:', source, target);
+                        isDragging = false;
+                        removeHighlights();
+                        selectedSquare = null;
+                        
+                        // Store the pending move
+                        pendingMove = {source: source, target: target};
+                        
                         if (typeof Shiny !== 'undefined') {
                             Shiny.setInputValue('board_move', source + target, {priority: 'event'});
                         }
-                        return 'snapback';
+                        
+                        // Don't snapback, let the piece stay where dropped
+                        // We'll update position from server response
+                        return;
+                    },
+                    onSnapEnd: function() {
+                        // Small delay to allow click event to be distinguished from drag
+                        setTimeout(function() {
+                            isDragging = false;
+                        }, 50);
                     }
                 });
                 console.log('✓ Main board initialized successfully');
+                
+                // Add click handlers for click-to-move functionality
+                $('#mainBoard').on('mousedown', '.square-55d63', function(e) {
+                    dragStartTime = Date.now();
+                });
+                
+                $('#mainBoard').on('click', '.square-55d63', function(e) {
+                    // Ignore if this was a drag operation (took more than 150ms)
+                    const clickDuration = Date.now() - dragStartTime;
+                    if (isDragging || clickDuration > 150) {
+                        console.log('Ignoring click, was a drag operation');
+                        return;
+                    }
+                    
+                    const square = $(this).attr('data-square');
+                    const piece = window.mainBoardWidget.position()[square];
+                    
+                    console.log('Click on square:', square, 'piece:', piece, 'selected:', selectedSquare);
+                    
+                    // If no square selected yet
+                    if (!selectedSquare) {
+                        // Only select if there's a piece on this square
+                        if (piece) {
+                            selectedSquare = square;
+                            removeHighlights();
+                            highlightSquare(square, 'highlight-selected');
+                            getLegalMovesForSquare(square);
+                            console.log('Selected piece at:', square);
+                        }
+                    } else {
+                        // A square is already selected, try to move
+                        if (square === selectedSquare) {
+                            // Clicked same square, deselect
+                            removeHighlights();
+                            selectedSquare = null;
+                            console.log('Deselected piece');
+                        } else if (piece && piece.charAt(0) === window.mainBoardWidget.position()[selectedSquare].charAt(0)) {
+                            // Clicked another piece of same color, switch selection
+                            selectedSquare = square;
+                            removeHighlights();
+                            highlightSquare(square, 'highlight-selected');
+                            getLegalMovesForSquare(square);
+                            console.log('Switched selection to:', square);
+                        } else {
+                            // Try to make the move
+                            const moveStr = selectedSquare + square;
+                            console.log('Click-to-move attempted:', moveStr);
+                            
+                            // Move the piece visually first for smooth animation
+                            const currentPos = window.mainBoardWidget.position();
+                            const newPos = Object.assign({}, currentPos);
+                            const pieceToMove = newPos[selectedSquare];
+                            delete newPos[selectedSquare];
+                            newPos[square] = pieceToMove;
+                            window.mainBoardWidget.position(newPos);
+                            
+                            // Store the pending move
+                            pendingMove = {source: selectedSquare, target: square};
+                            
+                            if (typeof Shiny !== 'undefined') {
+                                Shiny.setInputValue('board_move', moveStr, {priority: 'event'});
+                            }
+                            removeHighlights();
+                            selectedSquare = null;
+                        }
+                    }
+                });
 
                 // Apply any queued update that arrived before init.
                 if (window.pendingMainBoardFen) {
@@ -556,7 +719,16 @@ function registerShinyHandlers() {
             console.log('Update board message received:', message);
             if (window.mainBoardWidget && typeof window.mainBoardWidget.position === 'function') {
                 try {
-                    window.mainBoardWidget.position(message.fen);
+                    // Update the board position smoothly
+                    // Use animate: false if this is in response to a pending move to avoid double animation
+                    if (pendingMove) {
+                        // Move was just made, update without animation to avoid jump
+                        window.mainBoardWidget.position(message.fen, false);
+                        pendingMove = null;
+                    } else {
+                        // Normal update (e.g., reset, analyze), use animation
+                        window.mainBoardWidget.position(message.fen);
+                    }
                     console.log('Board position updated');
                 } catch(e) {
                     console.error('Error updating board:', e);
@@ -598,7 +770,23 @@ function registerShinyHandlers() {
                 });
         });
         
-        console.log('✓ Message handlers registered: update_board, evaluate_stockfish');
+        // Handle legal moves highlighting
+        Shiny.addCustomMessageHandler('highlight_moves', function(message) {
+            console.log('📥 Highlight moves received:', message);
+            removeHighlights();
+            
+            if (message.source) {
+                highlightSquare(message.source, 'highlight-selected');
+            }
+            
+            if (message.targets && message.targets.length > 0) {
+                message.targets.forEach(function(target) {
+                    highlightSquare(target.square, 'highlight-possible' + (target.capture ? ' capture' : ''));
+                });
+            }
+        });
+        
+        console.log('✓ Message handlers registered: update_board, evaluate_stockfish, highlight_moves');
         return true;
     }
     return false;
@@ -773,9 +961,11 @@ def server(input, output, session):
     
     # Data for selected moves (fetched lazily)
     move_a_stats = reactive.Value({})
-    move_a_eval = reactive.Value({})
+    move_a_eval = reactive.Value({})  # Stores depth 11 for display
+    move_a_eval_multi = reactive.Value({})  # Stores all depths: {3: {...}, 7: {...}, 11: {...}}
     move_b_stats = reactive.Value({})
-    move_b_eval = reactive.Value({})
+    move_b_eval = reactive.Value({})  # Stores depth 11 for display
+    move_b_eval_multi = reactive.Value({})  # Stores all depths: {3: {...}, 7: {...}, 11: {...}}
     
     # Track if board is initialized
     board_initialized = reactive.Value(False)
@@ -834,8 +1024,10 @@ def server(input, output, session):
         selected_move_b.set(None)
         move_a_stats.set({})
         move_a_eval.set({})
+        move_a_eval_multi.set({})
         move_b_stats.set({})
         move_b_eval.set({})
+        move_b_eval_multi.set({})
     
     # Reactive values for Stockfish results (responses come back via input.stockfish_response)
     stockfish_pending: Dict[int, asyncio.Event] = {}
@@ -887,6 +1079,40 @@ def server(input, output, session):
                 stockfish_pending[req_id].set()
         except Exception as e:
             print(f"Error processing stockfish response: {e}")
+    
+    # Handle legal move requests from JavaScript
+    @reactive.Effect
+    @reactive.event(input.get_legal_moves)
+    async def _on_get_legal_moves():
+        square = input.get_legal_moves()
+        if not square:
+            return
+        
+        board = main_board()
+        piece = board.piece_at(chess.parse_square(square))
+        
+        if not piece:
+            return
+        
+        # Get all legal moves from this square
+        legal_moves = []
+        for move in board.legal_moves:
+            if move.from_square == chess.parse_square(square):
+                target_square = chess.square_name(move.to_square)
+                is_capture = board.is_capture(move)
+                legal_moves.append({
+                    "square": target_square,
+                    "capture": is_capture
+                })
+        
+        # Send back to JavaScript for highlighting
+        await session.send_custom_message(
+            "highlight_moves",
+            {
+                "source": square,
+                "targets": legal_moves
+            }
+        )
     
     # Listen for board drag moves and apply if legal
     @reactive.Effect
@@ -958,8 +1184,10 @@ def server(input, output, session):
             selected_move_b.set(None)
             move_a_stats.set({})
             move_a_eval.set({})
+            move_a_eval_multi.set({})
             move_b_stats.set({})
             move_b_eval.set({})
+            move_b_eval_multi.set({})
             
         except ValueError as e:
             position_stats.set({"error": str(e)})
@@ -1131,6 +1359,34 @@ def server(input, output, session):
             if eval_generation.get(target_key) == generation:
                 target_value.set(result)
 
+        asyncio.create_task(_runner())
+    
+    def start_multi_depth_evaluation(fen: str, target_single: reactive.Value, target_multi: reactive.Value, target_key: str) -> None:
+        """Evaluate at multiple depths (3, 7, 11) and store all results."""
+        eval_generation[target_key] += 1
+        generation = eval_generation[target_key]
+        mode = input.eval_mode() if hasattr(input, "eval_mode") else "auto"
+        
+        # Mark as pending
+        target_single.set({"pending": True, "mode": mode})
+        target_multi.set({"pending": True})
+        
+        async def _runner() -> None:
+            depths = [3, 7, 11]
+            results = {}
+            
+            for depth in depths:
+                result = await _compute_evaluation(fen, depth=depth, mode=mode)
+                results[depth] = result
+                
+                # Update the single value with depth 11 as we go
+                if depth == 11 and eval_generation.get(target_key) == generation:
+                    target_single.set(result)
+            
+            # Store all results
+            if eval_generation.get(target_key) == generation:
+                target_multi.set(results)
+        
         asyncio.create_task(_runner())
     
     @output
@@ -1419,6 +1675,7 @@ def server(input, output, session):
         if not move_san:
             move_a_stats.set({})
             move_a_eval.set({})
+            move_a_eval_multi.set({})
             return
         
         board = main_board()
@@ -1430,13 +1687,14 @@ def server(input, output, session):
             test_board.push(move)
             fen = test_board.fen()
             
-            # Fetch stats, start evaluation in background
+            # Fetch stats, start multi-depth evaluation in background
             move_a_stats.set({})
-            start_evaluation_for_target(fen, move_a_eval, target_key="move_a")
+            start_multi_depth_evaluation(fen, move_a_eval, move_a_eval_multi, target_key="move_a")
             stats = await fetch_lichess_stats(fen)
             move_a_stats.set(stats)
         except Exception as e:
             move_a_eval.set({"error": str(e)})
+            move_a_eval_multi.set({"error": str(e)})
             move_a_stats.set({"error": str(e)})
     
     # When move B is selected, fetch its data lazily
@@ -1447,6 +1705,7 @@ def server(input, output, session):
         if not move_san:
             move_b_stats.set({})
             move_b_eval.set({})
+            move_b_eval_multi.set({})
             return
         
         board = main_board()
@@ -1458,13 +1717,14 @@ def server(input, output, session):
             test_board.push(move)
             fen = test_board.fen()
             
-            # Fetch stats, start evaluation in background
+            # Fetch stats, start multi-depth evaluation in background
             move_b_stats.set({})
-            start_evaluation_for_target(fen, move_b_eval, target_key="move_b")
+            start_multi_depth_evaluation(fen, move_b_eval, move_b_eval_multi, target_key="move_b")
             stats = await fetch_lichess_stats(fen)
             move_b_stats.set(stats)
         except Exception as e:
             move_b_eval.set({"error": str(e)})
+            move_b_eval_multi.set({"error": str(e)})
             move_b_stats.set({"error": str(e)})
     
     @output
@@ -1601,18 +1861,18 @@ def server(input, output, session):
             return ui.div()
         
         stats_a = move_a_stats()
-        eval_a = move_a_eval()
         stats_b = move_b_stats()
-        eval_b = move_b_eval()
+        eval_multi_a = move_a_eval_multi()
+        eval_multi_b = move_b_eval_multi()
         
         # Check if data is loaded (treat pending eval as loading)
         if (
             not stats_a
             or not stats_b
-            or not eval_a
-            or not eval_b
-            or (isinstance(eval_a, dict) and eval_a.get("pending"))
-            or (isinstance(eval_b, dict) and eval_b.get("pending"))
+            or not eval_multi_a
+            or not eval_multi_b
+            or (isinstance(eval_multi_a, dict) and eval_multi_a.get("pending"))
+            or (isinstance(eval_multi_b, dict) and eval_multi_b.get("pending"))
         ):
             return ui.tags.div(
                 {"class": "card"},
@@ -1629,34 +1889,55 @@ def server(input, output, session):
                 ),
             )
         
-        # Extract evaluation data
-        cp_a = None
-        cp_b = None
-        eval_a_text = "N/A"
-        eval_b_text = "N/A"
+        # Extract evaluation data for all depths
+        def get_eval_text(eval_dict, depth):
+            if not eval_dict or depth not in eval_dict:
+                return "N/A", None
+            eval_data = eval_dict[depth]
+            if eval_data and 'pvs' in eval_data and len(eval_data['pvs']) > 0:
+                cp = eval_data['pvs'][0].get('cp')
+                if cp is not None:
+                    text = f"+{cp/100:.2f}" if cp >= 0 else f"{cp/100:.2f}"
+                    return text, cp
+            return "N/A", None
         
-        if eval_a and 'pvs' in eval_a and len(eval_a['pvs']) > 0:
-            cp_a = eval_a['pvs'][0].get('cp')
-            if cp_a is not None:
-                eval_a_text = f"+{cp_a/100:.2f}" if cp_a >= 0 else f"{cp_a/100:.2f}"
+        # Get evaluations for each depth
+        depths = [3, 7, 11]
+        eval_rows = []
         
-        if eval_b and 'pvs' in eval_b and len(eval_b['pvs']) > 0:
-            cp_b = eval_b['pvs'][0].get('cp')
-            if cp_b is not None:
-                eval_b_text = f"+{cp_b/100:.2f}" if cp_b >= 0 else f"{cp_b/100:.2f}"
-        
-        # Determine eval winner
-        eval_a_class = ""
-        eval_b_class = ""
-        if cp_a is not None and cp_b is not None:
-            if cp_a > cp_b:
-                eval_a_class = "winner"
-                eval_b_class = "loser"
-            elif cp_b > cp_a:
-                eval_b_class = "winner"
-                eval_a_class = "loser"
-            else:
-                eval_a_class = eval_b_class = "tie"
+        for depth in depths:
+            eval_a_text, cp_a = get_eval_text(eval_multi_a, depth)
+            eval_b_text, cp_b = get_eval_text(eval_multi_b, depth)
+            
+            # Determine winner for this depth
+            eval_a_class = ""
+            eval_b_class = ""
+            delta = ""
+            
+            if cp_a is not None and cp_b is not None:
+                delta_cp = abs(cp_a - cp_b)
+                delta = f" <span class='delta-indicator' style='color: hsl(0, 0%, 70%);'>Δ {delta_cp/100:.2f}</span>"
+                
+                if cp_a > cp_b:
+                    eval_a_class = "winner metric-better"
+                    eval_b_class = "loser"
+                    eval_a_text += f" <span class='delta-indicator delta-positive'>↑ +{(cp_a-cp_b)/100:.2f}</span>"
+                    eval_b_text += f" <span class='delta-indicator delta-negative'>↓ {(cp_b-cp_a)/100:.2f}</span>"
+                elif cp_b > cp_a:
+                    eval_b_class = "winner metric-better"
+                    eval_a_class = "loser"
+                    eval_b_text += f" <span class='delta-indicator delta-positive'>↑ +{(cp_b-cp_a)/100:.2f}</span>"
+                    eval_a_text += f" <span class='delta-indicator delta-negative'>↓ {(cp_a-cp_b)/100:.2f}</span>"
+                else:
+                    eval_a_class = eval_b_class = "tie"
+            
+            eval_rows.append(f"""
+                <tr>
+                    <td class="metric-name" scope="row">Eval @ Depth {depth}{delta}</td>
+                    <td class="{eval_a_class}">{eval_a_text}</td>
+                    <td class="{eval_b_class}">{eval_b_text}</td>
+                </tr>
+            """)
         
         # Extract stats data
         total_a = stats_a.get("white", 0) + stats_a.get("draws", 0) + stats_a.get("black", 0)
@@ -1728,6 +2009,8 @@ def server(input, output, session):
         else:
             games_a_class = games_b_class = "tie"
         
+        eval_rows_html = "".join(eval_rows)
+        
         return ui.tags.div(
             {"class": "card"},
             ui.tags.div(
@@ -1748,11 +2031,7 @@ def server(input, output, session):
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr>
-                                    <td class="metric-name">Engine Evaluation</td>
-                                    <td class="{eval_a_class}">{eval_a_text}</td>
-                                    <td class="{eval_b_class}">{eval_b_text}</td>
-                                </tr>
+                                {eval_rows_html}
                                 <tr>
                                     <td class="metric-name">Total Games</td>
                                     <td class="{games_a_class}">{total_a:,}</td>
@@ -1779,6 +2058,7 @@ def server(input, output, session):
                             <span style="background-color: rgba(88, 153, 0, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(88, 62%, 50%);">Green</span> = Better
                             <span style="background-color: rgba(220, 50, 47, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(0, 60%, 60%);">Red</span> = Worse
                             <span style="background-color: rgba(181, 137, 0, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(37, 74%, 53%);">Yellow</span> = Tied
+                            <br><small style="margin-top: 8px; display: inline-block;">↑↓ arrows show difference, depths: 3/7/11</small>
                         </p>
                     </div>
                     """
