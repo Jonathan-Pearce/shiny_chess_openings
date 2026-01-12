@@ -34,11 +34,47 @@ body {
     color: hsl(0, 0%, 73%);
 }
 
+.topbar {
+    position: sticky;
+    top: 0;
+    z-index: 999;
+    background-color: hsl(37, 10%, 8%);
+    border-bottom: 1px solid hsl(0, 0%, 20%);
+    padding: 12px 0;
+    margin-bottom: 14px;
+    backdrop-filter: blur(6px);
+}
+
+.topbar-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.app-title {
+    font-size: 1.25rem;
+    font-weight: 800;
+    letter-spacing: 0.2px;
+    color: hsl(0, 0%, 92%);
+    margin: 0;
+}
+
+.app-subtitle {
+    font-size: 0.9rem;
+    color: hsl(0, 0%, 58%);
+    margin: 2px 0 0 0;
+}
+
 .card {
     background-color: hsl(37, 7%, 14%);
     border: none;
     box-shadow: 0 2px 5px rgba(0,0,0,0.3);
     border-radius: 4px;
+}
+
+.card-body {
+    padding: 14px 15px;
 }
 
 .card-header {
@@ -59,9 +95,47 @@ body {
 .eval-indicator {
     position: absolute;
     height: 100%;
-    background-color: #759900;
-    transition: left 0.3s ease;
+    width: 3px;
+    background-color: hsl(22, 100%, 42%);
+    transition: left 0.25s ease;
     border-radius: 2px;
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.78em;
+    font-weight: 700;
+    border: 1px solid hsl(0, 0%, 25%);
+    background-color: hsl(37, 5%, 19%);
+    color: hsl(0, 0%, 80%);
+}
+
+.badge-cloud {
+    color: hsl(209, 79%, 70%);
+    border-color: rgba(88, 153, 0, 0.0);
+}
+
+.badge-local {
+    color: hsl(88, 62%, 60%);
+    border-color: rgba(88, 153, 0, 0.0);
+}
+
+.badge-auto {
+    color: hsl(0, 0%, 70%);
+}
+
+.notice {
+    padding: 10px 12px;
+    border-radius: 4px;
+    border: 1px solid hsl(0, 0%, 25%);
+    background-color: hsl(37, 7%, 16%);
+}
+
+.notice-error {
+    border-left: 4px solid hsl(0, 60%, 55%);
+    background-color: rgba(220, 50, 47, 0.14);
 }
 
 .metric-card {
@@ -91,6 +165,11 @@ body {
 @media (max-width: 768px) {
     .board-container {
         width: 100%;
+    }
+
+    .topbar-inner {
+        flex-direction: column;
+        align-items: flex-start;
     }
 }
 
@@ -633,19 +712,54 @@ if (!registerShinyHandlers()) {
 app_ui = ui.page_fluid(
     ui.HTML(custom_css),
     ui.HTML(chessboard_js),
-    
-    # Info button in top right
-    ui.div(
-        ui.input_action_button(
-            "show_info", 
-            "ℹ️ How to Use", 
-            class_="btn-info",
-            style="position: fixed; top: 10px; right: 10px; z-index: 1000; border-radius: 20px; padding: 8px 16px;"
+
+    # Sticky top bar
+    ui.tags.div(
+        {"class": "topbar"},
+        ui.tags.div(
+            {"class": "container"},
+            ui.tags.div(
+                {"class": "topbar-inner"},
+                ui.tags.div(
+                    ui.h1("Chess Opening / Move Explorer", class_="app-title"),
+                    ui.p(
+                        "Set a position, then compare two candidate moves side-by-side.",
+                        class_="app-subtitle",
+                    ),
+                ),
+                ui.input_action_button(
+                    "show_info",
+                    "How to Use",
+                    class_="btn-info",
+                    style="border-radius: 20px; padding: 8px 16px;",
+                ),
+            ),
+        ),
+    ),
+
+    # Quick welcome / guidance
+    ui.tags.div(
+        {"class": "container"},
+        ui.tags.div(
+            {"class": "welcome-section"},
+            ui.h4("Welcome", style="margin-top: 0;"),
+            ui.tags.ul(
+                ui.tags.li("Enter moves (SAN) or choose a preset opening."),
+                ui.tags.li("Click ‘Analyze position’ to fetch Lichess stats + engine eval."),
+                ui.tags.li("Pick Move A and Move B to compare results."),
+            ),
+            ui.p(
+                ui.tags.small(
+                    "Stats: Lichess Opening Explorer • Eval: Local Stockfish.js and/or Lichess Cloud Eval."
+                )
+            ),
         ),
     ),
     
     # Two-column layout (Bootstrap grid; avoid bslib JS)
-    ui.row(
+    ui.tags.div(
+        {"class": "container"},
+        ui.row(
         # Column 1: Current Position
         ui.column(
             4,
@@ -669,11 +783,28 @@ app_ui = ui.page_fluid(
                         placeholder="e.g., e4 e5 Nf3 Nc6",
                         width="100%",
                     ),
+
+                    # Preset openings
+                    ui.div(
+                        ui.input_select(
+                            "preset_opening",
+                            "Quick opening:",
+                            choices={"(Choose a preset)": "", **PRESETS},
+                            width="100%",
+                        ),
+                        ui.input_action_button(
+                            "apply_preset",
+                            "Apply preset",
+                            class_="btn-secondary",
+                            style="width: 100%; margin-top: 8px;",
+                        ),
+                        style="margin-top: 10px;",
+                    ),
                     # Action buttons
                     ui.div(
                         ui.input_action_button(
                             "analyze_position",
-                            "Analyze",
+                            "Analyze position",
                             class_="btn-primary",
                             style="width: 48%; margin-right: 2%;",
                         ),
@@ -755,6 +886,7 @@ app_ui = ui.page_fluid(
                 ui.output_ui("comparison_panel"),
             ),
         ),
+        ),
     ),
 )
 
@@ -828,6 +960,7 @@ def server(input, output, session):
             {"fen": chess.Board().fen()}
         )
         ui.update_text("moves", value="")
+        ui.update_select("preset_opening", selected="")
         position_stats.set({})
         position_eval.set({})
         selected_move_a.set(None)
@@ -930,37 +1063,89 @@ def server(input, output, session):
             return board
         except (chess.InvalidMoveError, chess.IllegalMoveError, chess.AmbiguousMoveError) as e:
             raise ValueError(f"Invalid move sequence: {e}")
+
+    def _eval_percent_from_cp(cp: int) -> float:
+        """Map centipawns to a 0..100 bar position (50 = equal)."""
+        capped = max(-400, min(400, cp))
+        return 50.0 + (capped / 8.0)
+
+    def _eval_badge_html(evaluation: Dict[str, Any]) -> str:
+        if not evaluation:
+            return ""
+        if evaluation.get("pending"):
+            mode = evaluation.get("mode")
+            if mode == "cloud":
+                return "<span class='badge badge-cloud'>Cloud</span>"
+            if mode == "local":
+                return "<span class='badge badge-local'>Local</span>"
+            return "<span class='badge badge-auto'>Auto</span>"
+
+        source = evaluation.get("source")
+        if source == "stockfish.js":
+            return "<span class='badge badge-local'>Local</span>"
+        if source == "cloud":
+            return "<span class='badge badge-cloud'>Cloud</span>"
+        # If it came from the cloud endpoint, older code paths won't set 'source'
+        if "pvs" in evaluation:
+            return "<span class='badge badge-cloud'>Cloud</span>"
+        return ""
+
+    def _eval_bar_html(cp: int | None) -> str:
+        if cp is None:
+            return ""
+        left = _eval_percent_from_cp(cp)
+        # Subtract half the indicator width so it centers nicely
+        return (
+            "<div class='eval-bar' title='Evaluation (white advantage to the right)'>"
+            f"<div class='eval-indicator' style='left: calc({left:.1f}% - 1.5px);'></div>"
+            "</div>"
+        )
+
+    async def analyze_from_moves(move_string: str) -> None:
+        """Parse SAN moves, update board, fetch stats, and start evaluation."""
+        new_board = parse_moves(move_string)
+        main_board.set(new_board)
+
+        await session.send_custom_message(
+            "update_board",
+            {"fen": new_board.fen()},
+        )
+
+        fen = new_board.fen()
+        stats = await fetch_lichess_stats(fen)
+        position_stats.set(stats)
+
+        # Start evaluation in background to avoid deadlocks on input callbacks
+        start_evaluation_for_target(fen, position_eval, target_key="position")
+
+        # Clear previous move selections
+        selected_move_a.set(None)
+        selected_move_b.set(None)
+        move_a_stats.set({})
+        move_a_eval.set({})
+        move_b_stats.set({})
+        move_b_eval.set({})
     
     # Analyze position
     @reactive.Effect
     @reactive.event(input.analyze_position)
     async def _analyze_position():
         try:
-            new_board = parse_moves(input.moves())
-            main_board.set(new_board)
-            
-            # Update board position
-            await session.send_custom_message(
-                "update_board",
-                {"fen": new_board.fen()}
-            )
-            
-            # Fetch stats for current position
-            fen = new_board.fen()
-            stats = await fetch_lichess_stats(fen)
-            position_stats.set(stats)
+            await analyze_from_moves(input.moves())
+        except ValueError as e:
+            position_stats.set({"error": str(e)})
+            position_eval.set({})
 
-            # Start evaluation in background to avoid deadlocks on input callbacks
-            start_evaluation_for_target(fen, position_eval, target_key="position")
-            
-            # Clear previous move selections
-            selected_move_a.set(None)
-            selected_move_b.set(None)
-            move_a_stats.set({})
-            move_a_eval.set({})
-            move_b_stats.set({})
-            move_b_eval.set({})
-            
+    # Apply preset opening
+    @reactive.Effect
+    @reactive.event(input.apply_preset)
+    async def _apply_preset():
+        preset_moves = input.preset_opening()
+        if not preset_moves:
+            return
+        ui.update_text("moves", value=preset_moves)
+        try:
+            await analyze_from_moves(preset_moves)
         except ValueError as e:
             position_stats.set({"error": str(e)})
             position_eval.set({})
@@ -1158,26 +1343,21 @@ def server(input, output, session):
         
         # Evaluation
         eval_text = "Not analyzed"
-        eval_source = ""
+        cp = None
         if evaluation and evaluation.get("pending"):
             eval_text = "⏳ Evaluating…"
-            mode = evaluation.get("mode")
-            if mode == "cloud":
-                eval_source = " <span style='color: hsl(209, 79%, 56%); font-size: 0.8em;'>(Cloud)</span>"
-            elif mode == "local":
-                eval_source = " <span style='color: hsl(88, 62%, 50%); font-size: 0.8em;'>(Local)</span>"
-            else:
-                eval_source = " <span style='color: hsl(0, 0%, 58%); font-size: 0.8em;'>(Auto)</span>"
-        if evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
+        elif evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
             cp = evaluation['pvs'][0].get('cp')
             if cp is not None:
                 eval_text = f"+{cp/100:.2f}" if cp >= 0 else f"{cp/100:.2f}"
-                if evaluation.get('source') == 'stockfish.js':
-                    eval_source = " <span style='color: hsl(88, 62%, 50%); font-size: 0.8em;'>(Local)</span>"
-                else:
-                    eval_source = " <span style='color: hsl(209, 79%, 56%); font-size: 0.8em;'>(Cloud)</span>"
         elif evaluation and 'error' in evaluation:
-            eval_text = f"Error: {evaluation['error']}"
+            eval_text = "Evaluation failed"
+
+        eval_badge = _eval_badge_html(evaluation if isinstance(evaluation, dict) else {})
+        eval_bar = _eval_bar_html(cp)
+        eval_error_html = ""
+        if evaluation and isinstance(evaluation, dict) and 'error' in evaluation:
+            eval_error_html = f"<div class='notice notice-error' style='margin-top: 10px;'><small>Eval error: {evaluation['error']}</small></div>"
         
         # Stats
         total_games = 0
@@ -1211,7 +1391,13 @@ def server(input, output, session):
                     <strong>Moves:</strong> <span style="color: hsl(0, 0%, 100%);">{move_history}</span>
                 </div>
                 <p><strong>{side_to_move}</strong></p>
-                <p><strong>Evaluation:</strong> <span style="color: hsl(0, 0%, 100%); font-weight: 700;">{eval_text}</span>{eval_source}</p>
+                <p style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <strong>Evaluation:</strong>
+                    <span style="color: hsl(0, 0%, 100%); font-weight: 700;">{eval_text}</span>
+                    {eval_badge}
+                </p>
+                {eval_bar}
+                {eval_error_html}
                 <hr>
                 {stats_html}
             </div>
@@ -1489,6 +1675,7 @@ def server(input, output, session):
         
         # Evaluation for move A
         eval_html = "<p style='color: hsl(0, 0%, 73%);'><em>No evaluation available</em></p>"
+        eval_bar = ""
         if evaluation and evaluation.get('pending'):
             eval_html = "<p style='color: hsl(0, 0%, 73%);'><em>⏳ Evaluating…</em></p>"
         elif evaluation and 'error' in evaluation:
@@ -1498,6 +1685,7 @@ def server(input, output, session):
             if cp_a is not None:
                 eval_text = f"+{cp_a/100:.2f}" if cp_a >= 0 else f"{cp_a/100:.2f}"
                 eval_html = f"<p><strong>Evaluation:</strong> <span style='color: hsl(0, 0%, 100%); font-weight: 700; font-size: 1.1em;'>{eval_text}</span></p>"
+                eval_bar = _eval_bar_html(cp_a)
         
         # Stats for move A
         stats_html = "<p style='color: hsl(0, 0%, 73%);'><em>No statistics available</em></p>"
@@ -1523,6 +1711,7 @@ def server(input, output, session):
             <div class="metric-card" style="height: 100%;">
                 <h5 style="color: hsl(209, 79%, 56%); margin-top: 0;">{move_san}</h5>
                 {eval_html}
+                {eval_bar}
                 <hr style="margin: 10px 0;">
                 {stats_html}
             </div>
@@ -1550,6 +1739,7 @@ def server(input, output, session):
         
         # Evaluation for move B
         eval_html = "<p style='color: hsl(0, 0%, 73%);'><em>No evaluation available</em></p>"
+        eval_bar = ""
         if evaluation and evaluation.get('pending'):
             eval_html = "<p style='color: hsl(0, 0%, 73%);'><em>⏳ Evaluating…</em></p>"
         elif evaluation and 'error' in evaluation:
@@ -1559,6 +1749,7 @@ def server(input, output, session):
             if cp_b is not None:
                 eval_text = f"+{cp_b/100:.2f}" if cp_b >= 0 else f"{cp_b/100:.2f}"
                 eval_html = f"<p><strong>Evaluation:</strong> <span style='color: hsl(0, 0%, 100%); font-weight: 700; font-size: 1.1em;'>{eval_text}</span></p>"
+                eval_bar = _eval_bar_html(cp_b)
         
         # Stats for move B
         stats_html = "<p style='color: hsl(0, 0%, 73%);'><em>No statistics available</em></p>"
@@ -1584,6 +1775,7 @@ def server(input, output, session):
             <div class="metric-card" style="height: 100%;">
                 <h5 style="color: hsl(88, 62%, 37%); margin-top: 0;">{move_san}</h5>
                 {eval_html}
+                {eval_bar}
                 <hr style="margin: 10px 0;">
                 {stats_html}
             </div>
