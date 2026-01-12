@@ -48,20 +48,34 @@ body {
 }
 
 .eval-bar {
-    height: 30px;
-    background: linear-gradient(to right, #3d3d3d 0%, #3d3d3d 50%, #fff 50%, #fff 100%);
-    border: 1px solid #ccc;
-    border-radius: 3px;
+    height: 40px;
+    background: linear-gradient(to right, #2c2c2c 0%, #2c2c2c 50%, #e8e8e8 50%, #e8e8e8 100%);
+    border: 2px solid hsl(0, 0%, 25%);
+    border-radius: 6px;
     position: relative;
-    margin: 10px 0;
+    margin: 15px 0;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+}
+
+.eval-bar-label {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-weight: 700;
+    font-size: 0.9em;
+    z-index: 3;
+    color: hsl(0, 0%, 100%);
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
 }
 
 .eval-indicator {
     position: absolute;
     height: 100%;
     background-color: #759900;
-    transition: left 0.3s ease;
-    border-radius: 2px;
+    transition: width 0.4s ease, left 0.4s ease;
+    border-radius: 4px;
+    box-shadow: 0 0 8px rgba(117, 153, 0, 0.5);
 }
 
 .metric-card {
@@ -91,6 +105,34 @@ body {
 @media (max-width: 768px) {
     .board-container {
         width: 100%;
+    }
+    
+    .move-btn {
+        width: calc(50% - 10px);
+        margin: 5px;
+    }
+    
+    .comparison-table {
+        font-size: 0.85em;
+    }
+    
+    .comparison-table th, .comparison-table td {
+        padding: 8px;
+    }
+}
+
+@media (max-width: 576px) {
+    .selection-legend {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .move-btn {
+        width: 100%;
+    }
+    
+    input[type="text"], select {
+        font-size: 16px !important; /* Prevent zoom on iOS */
     }
 }
 
@@ -144,6 +186,37 @@ body {
     transition: all 0.15s ease;
     font-weight: 500;
     color: hsl(0, 0%, 80%);
+    position: relative;
+    overflow: hidden;
+}
+
+.move-btn-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.move-btn-popularity {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 4px;
+    background: linear-gradient(90deg, hsl(209, 79%, 56%), hsl(88, 62%, 37%));
+    opacity: 0.6;
+    z-index: 1;
+    transition: opacity 0.15s ease;
+}
+
+.move-btn:hover .move-btn-popularity {
+    opacity: 0.8;
+}
+
+.move-stats {
+    font-size: 0.75em;
+    color: hsl(0, 0%, 65%);
+    font-weight: 400;
 }
 
 .move-btn:hover:not(:disabled) {
@@ -255,6 +328,24 @@ body {
     background-color: rgba(181, 137, 0, 0.2);
     font-weight: 600;
     color: hsl(37, 74%, 53%);
+}
+
+.delta-indicator {
+    font-size: 0.85em;
+    margin-left: 6px;
+    font-weight: 600;
+}
+
+.delta-positive {
+    color: hsl(88, 62%, 50%);
+}
+
+.delta-negative {
+    color: hsl(0, 60%, 60%);
+}
+
+.metric-better {
+    box-shadow: 0 0 0 2px hsl(88, 62%, 37%) inset;
 }
 
 .btn-primary {
@@ -386,6 +477,57 @@ strong {
 small {
     font-size: 0.85em;
     color: hsl(0, 0%, 58%);
+}
+
+/* Position type badge */
+.position-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    font-weight: 600;
+    margin-left: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.position-badge.opening {
+    background-color: rgba(88, 153, 0, 0.3);
+    color: hsl(88, 62%, 50%);
+    border: 1px solid hsl(88, 62%, 37%);
+}
+
+.position-badge.middlegame {
+    background-color: rgba(209, 154, 56, 0.3);
+    color: hsl(37, 74%, 53%);
+    border: 1px solid hsl(37, 74%, 43%);
+}
+
+.position-badge.endgame {
+    background-color: rgba(209, 79, 156, 0.3);
+    color: hsl(330, 79%, 56%);
+    border: 1px solid hsl(330, 79%, 46%);
+}
+
+/* Skeleton loader */
+.skeleton {
+    background: linear-gradient(90deg, hsl(37, 5%, 19%) 25%, hsl(37, 7%, 22%) 50%, hsl(37, 5%, 19%) 75%);
+    background-size: 200% 100%;
+    animation: skeleton-loading 1.5s infinite;
+    border-radius: 4px;
+    height: 20px;
+    margin: 8px 0;
+}
+
+@keyframes skeleton-loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Focus visible for better accessibility */
+*:focus-visible {
+    outline: 2px solid hsl(22, 100%, 42%);
+    outline-offset: 2px;
 }
 </style>
 """
@@ -1153,12 +1295,28 @@ def server(input, output, session):
         
         move_history = " ".join(moves) if moves else "Starting position"
         
+        # Determine position type based on move count and material
+        move_count = len(board.move_stack)
+        piece_count = len(board.piece_map())
+        position_type = "opening"
+        position_badge_class = "opening"
+        
+        if move_count > 40 or piece_count <= 10:
+            position_type = "endgame"
+            position_badge_class = "endgame"
+        elif move_count > 15 or piece_count <= 20:
+            position_type = "middlegame"
+            position_badge_class = "middlegame"
+        
         # Determine side to move
         side_to_move = "White to move" if board.turn == chess.WHITE else "Black to move"
         
         # Evaluation
         eval_text = "Not analyzed"
         eval_source = ""
+        cp_value = None
+        eval_bar_html = ""
+        
         if evaluation and evaluation.get("pending"):
             eval_text = "⏳ Evaluating…"
             mode = evaluation.get("mode")
@@ -1168,14 +1326,28 @@ def server(input, output, session):
                 eval_source = " <span style='color: hsl(88, 62%, 50%); font-size: 0.8em;'>(Local)</span>"
             else:
                 eval_source = " <span style='color: hsl(0, 0%, 58%); font-size: 0.8em;'>(Auto)</span>"
-        if evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
+            eval_bar_html = '<div class="skeleton" style="height: 40px; margin: 15px 0;"></div>'
+        elif evaluation and 'pvs' in evaluation and len(evaluation['pvs']) > 0:
             cp = evaluation['pvs'][0].get('cp')
             if cp is not None:
+                cp_value = cp
                 eval_text = f"+{cp/100:.2f}" if cp >= 0 else f"{cp/100:.2f}"
                 if evaluation.get('source') == 'stockfish.js':
                     eval_source = " <span style='color: hsl(88, 62%, 50%); font-size: 0.8em;'>(Local)</span>"
                 else:
                     eval_source = " <span style='color: hsl(209, 79%, 56%); font-size: 0.8em;'>(Cloud)</span>"
+                
+                # Create visual evaluation bar
+                # Normalize cp to 0-100 scale (clamp at ±5.00)
+                normalized = max(-500, min(500, cp)) / 10  # -50 to +50
+                white_percentage = 50 + normalized  # 0 to 100
+                
+                eval_bar_html = f'''
+                    <div class="eval-bar" role="progressbar" aria-valuenow="{white_percentage}" aria-valuemin="0" aria-valuemax="100" aria-label="Position evaluation bar">
+                        <div class="eval-bar-label">{eval_text}</div>
+                        <div class="eval-indicator" style="width: {white_percentage}%; left: 0;"></div>
+                    </div>
+                '''
         elif evaluation and 'error' in evaluation:
             eval_text = f"Error: {evaluation['error']}"
         
@@ -1205,13 +1377,17 @@ def server(input, output, session):
             stats_html = f"<p style='color: hsl(0, 60%, 60%);'>Stats error: {stats['error']}</p>"
         
         return ui.HTML(f"""
-            <div class="metric-card" style="height: 100%;">
-                <h4 style="color: hsl(0, 0%, 89%); font-weight: 700; margin-bottom: 10px;">📊 Position Summary</h4>
+            <div class="metric-card" style="height: 100%;" role="region" aria-label="Position summary">
+                <h4 style="color: hsl(0, 0%, 89%); font-weight: 700; margin-bottom: 10px;">
+                    📊 Position Summary
+                    <span class="position-badge {position_badge_class}">{position_type}</span>
+                </h4>
                 <div class="move-history" style="margin-bottom: 15px; color: hsl(0, 0%, 89%);">
                     <strong>Moves:</strong> <span style="color: hsl(0, 0%, 100%);">{move_history}</span>
                 </div>
                 <p><strong>{side_to_move}</strong></p>
                 <p><strong>Evaluation:</strong> <span style="color: hsl(0, 0%, 100%); font-weight: 700;">{eval_text}</span>{eval_source}</p>
+                {eval_bar_html}
                 <hr>
                 {stats_html}
             </div>
@@ -1280,8 +1456,19 @@ def server(input, output, session):
         move_a = selected_move_a()
         move_b = selected_move_b()
         
-        # Create buttons for top moves
+        # Create buttons for top moves with popularity indicators
         move_buttons = []
+        max_games = 0
+        move_game_counts = {}
+        
+        # Calculate max games for normalization
+        if position_st and 'moves' in position_st:
+            for m in position_st['moves']:
+                if m['san'] in top_moves:
+                    games = m.get('white', 0) + m.get('draws', 0) + m.get('black', 0)
+                    move_game_counts[m['san']] = games
+                    max_games = max(max_games, games)
+        
         for move_san in top_moves:
             # Determine button class
             btn_class = "move-btn"
@@ -1290,13 +1477,33 @@ def server(input, output, session):
             elif move_san == move_b:
                 btn_class += " selected-b"
             
+            # Get statistics for this move
+            games_count = move_game_counts.get(move_san, 0)
+            popularity_pct = (games_count / max_games * 100) if max_games > 0 else 0
+            
+            # Format win rate if available
+            win_rate_text = ""
+            if position_st and 'moves' in position_st:
+                for m in position_st['moves']:
+                    if m['san'] == move_san:
+                        total = m.get('white', 0) + m.get('draws', 0) + m.get('black', 0)
+                        if total > 0:
+                            white_pct = round(m.get('white', 0) / total * 100, 1)
+                            win_rate_text = f"<span class='move-stats'>W: {white_pct}% · {games_count:,} games</span>"
+                        break
+            
+            btn_label = f'<div class="move-btn-content"><span>{move_san}</span>{win_rate_text}</div><div class="move-btn-popularity" style="width: {popularity_pct}%;"></div>'
+            
             move_buttons.append(
-                ui.input_action_button(
-                    f"move_btn_{move_san.replace('+', 'p').replace('#', 'h').replace('=', 'e')}",
-                    move_san,
-                    class_=btn_class,
-                    onclick=f"Shiny.setInputValue('move_clicked', '{move_san}', {{priority: 'event'}})"
-                )
+                ui.HTML(f'''
+                    <button 
+                        class="{btn_class}" 
+                        onclick="Shiny.setInputValue('move_clicked', '{move_san}', {{priority: 'event'}})"
+                        aria-label="Select move {move_san}, played in {games_count} games"
+                        title="{move_san} - {games_count:,} games">
+                        {btn_label}
+                    </button>
+                ''')
             )
         
         # Create dropdown for other moves
@@ -1634,6 +1841,7 @@ def server(input, output, session):
         cp_b = None
         eval_a_text = "N/A"
         eval_b_text = "N/A"
+        eval_delta = ""
         
         if eval_a and 'pvs' in eval_a and len(eval_a['pvs']) > 0:
             cp_a = eval_a['pvs'][0].get('cp')
@@ -1645,16 +1853,26 @@ def server(input, output, session):
             if cp_b is not None:
                 eval_b_text = f"+{cp_b/100:.2f}" if cp_b >= 0 else f"{cp_b/100:.2f}"
         
+        # Calculate delta
+        if cp_a is not None and cp_b is not None:
+            delta_cp = abs(cp_a - cp_b)
+            delta_text = f"Δ {delta_cp/100:.2f}"
+            eval_delta = f"<span class='delta-indicator' style='color: hsl(0, 0%, 70%);'>{delta_text}</span>"
+        
         # Determine eval winner
         eval_a_class = ""
         eval_b_class = ""
         if cp_a is not None and cp_b is not None:
             if cp_a > cp_b:
-                eval_a_class = "winner"
+                eval_a_class = "winner metric-better"
                 eval_b_class = "loser"
+                eval_a_text += f" <span class='delta-indicator delta-positive'>↑ +{(cp_a-cp_b)/100:.2f}</span>"
+                eval_b_text += f" <span class='delta-indicator delta-negative'>↓ {(cp_b-cp_a)/100:.2f}</span>"
             elif cp_b > cp_a:
-                eval_b_class = "winner"
+                eval_b_class = "winner metric-better"
                 eval_a_class = "loser"
+                eval_b_text += f" <span class='delta-indicator delta-positive'>↑ +{(cp_b-cp_a)/100:.2f}</span>"
+                eval_a_text += f" <span class='delta-indicator delta-negative'>↓ {(cp_a-cp_b)/100:.2f}</span>"
             else:
                 eval_a_class = eval_b_class = "tie"
         
@@ -1679,40 +1897,64 @@ def server(input, output, session):
             draw_pct_b = round(stats_b.get("draws", 0) / total_b * 100, 1)
             black_pct_b = round(stats_b.get("black", 0) / total_b * 100, 1)
         
-        # Determine win rate winners
+        # Determine win rate winners with deltas
         white_a_class = ""
         white_b_class = ""
+        white_a_display = f"{white_pct_a}%"
+        white_b_display = f"{white_pct_b}%"
+        
         if total_a > 0 and total_b > 0:
+            white_delta = white_pct_a - white_pct_b
             if white_pct_a > white_pct_b:
-                white_a_class = "winner"
+                white_a_class = "winner metric-better"
                 white_b_class = "loser"
+                white_a_display += f" <span class='delta-indicator delta-positive'>↑ +{white_delta:.1f}</span>"
+                white_b_display += f" <span class='delta-indicator delta-negative'>↓ {-white_delta:.1f}</span>"
             elif white_pct_b > white_pct_a:
-                white_b_class = "winner"
+                white_b_class = "winner metric-better"
                 white_a_class = "loser"
+                white_b_display += f" <span class='delta-indicator delta-positive'>↑ +{-white_delta:.1f}</span>"
+                white_a_display += f" <span class='delta-indicator delta-negative'>↓ {white_delta:.1f}</span>"
             else:
                 white_a_class = white_b_class = "tie"
         
         draw_a_class = ""
         draw_b_class = ""
+        draw_a_display = f"{draw_pct_a}%"
+        draw_b_display = f"{draw_pct_b}%"
+        
         if total_a > 0 and total_b > 0:
+            draw_delta = draw_pct_a - draw_pct_b
             if draw_pct_a > draw_pct_b:
                 draw_a_class = "winner"
                 draw_b_class = "loser"
+                draw_a_display += f" <span class='delta-indicator delta-positive'>↑ +{draw_delta:.1f}</span>"
+                draw_b_display += f" <span class='delta-indicator delta-negative'>↓ {-draw_delta:.1f}</span>"
             elif draw_pct_b > draw_pct_a:
                 draw_b_class = "winner"
                 draw_a_class = "loser"
+                draw_b_display += f" <span class='delta-indicator delta-positive'>↑ +{-draw_delta:.1f}</span>"
+                draw_a_display += f" <span class='delta-indicator delta-negative'>↓ {draw_delta:.1f}</span>"
             else:
                 draw_a_class = draw_b_class = "tie"
         
         black_a_class = ""
         black_b_class = ""
+        black_a_display = f"{black_pct_a}%"
+        black_b_display = f"{black_pct_b}%"
+        
         if total_a > 0 and total_b > 0:
+            black_delta = black_pct_a - black_pct_b
             if black_pct_a > black_pct_b:
-                black_a_class = "winner"
+                black_a_class = "winner metric-better"
                 black_b_class = "loser"
+                black_a_display += f" <span class='delta-indicator delta-positive'>↑ +{black_delta:.1f}</span>"
+                black_b_display += f" <span class='delta-indicator delta-negative'>↓ {-black_delta:.1f}</span>"
             elif black_pct_b > black_pct_a:
-                black_b_class = "winner"
+                black_b_class = "winner metric-better"
                 black_a_class = "loser"
+                black_b_display += f" <span class='delta-indicator delta-positive'>↑ +{-black_delta:.1f}</span>"
+                black_a_display += f" <span class='delta-indicator delta-negative'>↓ {black_delta:.1f}</span>"
             else:
                 black_a_class = black_b_class = "tie"
         
@@ -1738,48 +1980,49 @@ def server(input, output, session):
                 {"class": "card-body"},
                 ui.HTML(
                     f"""
-                    <div class="comparison-panel">
+                    <div class="comparison-panel" role="region" aria-label="Move comparison table">
                         <table class="comparison-table">
                             <thead>
                                 <tr>
-                                    <th class="metric-name">Metric</th>
-                                    <th style="color: hsl(209, 79%, 56%); font-weight: 700;">{move_a_san}</th>
-                                    <th style="color: hsl(88, 62%, 37%); font-weight: 700;">{move_b_san}</th>
+                                    <th class="metric-name" scope="col">Metric</th>
+                                    <th scope="col" style="color: hsl(209, 79%, 56%); font-weight: 700;">{move_a_san}</th>
+                                    <th scope="col" style="color: hsl(88, 62%, 37%); font-weight: 700;">{move_b_san}</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr>
-                                    <td class="metric-name">Engine Evaluation</td>
+                                    <td class="metric-name" scope="row">Engine Evaluation {eval_delta}</td>
                                     <td class="{eval_a_class}">{eval_a_text}</td>
                                     <td class="{eval_b_class}">{eval_b_text}</td>
                                 </tr>
                                 <tr>
-                                    <td class="metric-name">Total Games</td>
+                                    <td class="metric-name" scope="row">Total Games</td>
                                     <td class="{games_a_class}">{total_a:,}</td>
                                     <td class="{games_b_class}">{total_b:,}</td>
                                 </tr>
                                 <tr>
-                                    <td class="metric-name">White Win %</td>
-                                    <td class="{white_a_class}">{white_pct_a}%</td>
-                                    <td class="{white_b_class}">{white_pct_b}%</td>
+                                    <td class="metric-name" scope="row">White Win %</td>
+                                    <td class="{white_a_class}">{white_a_display}</td>
+                                    <td class="{white_b_class}">{white_b_display}</td>
                                 </tr>
                                 <tr>
-                                    <td class="metric-name">Draw %</td>
-                                    <td class="{draw_a_class}">{draw_pct_a}%</td>
-                                    <td class="{draw_b_class}">{draw_pct_b}%</td>
+                                    <td class="metric-name" scope="row">Draw %</td>
+                                    <td class="{draw_a_class}">{draw_a_display}</td>
+                                    <td class="{draw_b_class}">{draw_b_display}</td>
                                 </tr>
                                 <tr>
-                                    <td class="metric-name">Black Win %</td>
-                                    <td class="{black_a_class}">{black_pct_a}%</td>
-                                    <td class="{black_b_class}">{black_pct_b}%</td>
+                                    <td class="metric-name" scope="row">Black Win %</td>
+                                    <td class="{black_a_class}">{black_a_display}</td>
+                                    <td class="{black_b_class}">{black_b_display}</td>
                                 </tr>
                             </tbody>
                         </table>
-                        <p style="margin-top: 15px; font-size: 0.85em; color: hsl(0, 0%, 58%); text-align: center;">
+                        <div style="margin-top: 15px; font-size: 0.85em; color: hsl(0, 0%, 58%); text-align: center;" role="note" aria-label="Color legend">
                             <span style="background-color: rgba(88, 153, 0, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(88, 62%, 50%);">Green</span> = Better
                             <span style="background-color: rgba(220, 50, 47, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(0, 60%, 60%);">Red</span> = Worse
                             <span style="background-color: rgba(181, 137, 0, 0.3); padding: 4px 10px; border-radius: 3px; margin: 0 5px; font-weight: 600; color: hsl(37, 74%, 53%);">Yellow</span> = Tied
-                        </p>
+                            <br><small style="margin-top: 8px; display: inline-block;">↑↓ arrows show difference between moves</small>
+                        </div>
                     </div>
                     """
                 ),
